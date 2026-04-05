@@ -449,6 +449,244 @@ class TestConfigurationSafetyViaMCP:
                 assert any(err in str(e).lower() for err in expected_errors)
 
 
+class TestExportActionInjectionBlocking:
+    """Verify that export-filename and related export-* actions cannot be passed
+    directly by callers, preventing arbitrary file-write via action injection."""
+
+    @pytest.mark.asyncio
+    async def test_export_filename_blocked_in_actions(self, test_config):
+        """export-filename must be rejected when passed in actions list."""
+        async with Client(app) as client:
+            with pytest.raises(Exception) as exc_info:
+                await client.call_tool(
+                    "action_run",
+                    {
+                        "doc_type": "inline",
+                        "doc_svg": "<svg><circle/></svg>",
+                        "actions": ["export-filename:/tmp/evil.png"],
+                    },
+                )
+            assert any(
+                word in str(exc_info.value).lower()
+                for word in ["unsafe", "action", "not allowed"]
+            )
+
+    @pytest.mark.asyncio
+    async def test_export_do_blocked_in_actions(self, test_config):
+        """export-do must be rejected when passed in actions list."""
+        async with Client(app) as client:
+            with pytest.raises(Exception) as exc_info:
+                await client.call_tool(
+                    "action_run",
+                    {
+                        "doc_type": "inline",
+                        "doc_svg": "<svg><circle/></svg>",
+                        "actions": ["export-do"],
+                    },
+                )
+            assert any(
+                word in str(exc_info.value).lower()
+                for word in ["unsafe", "action", "not allowed"]
+            )
+
+    @pytest.mark.asyncio
+    async def test_export_type_blocked_in_actions(self, test_config):
+        """export-type must be rejected when passed in actions list."""
+        async with Client(app) as client:
+            with pytest.raises(Exception) as exc_info:
+                await client.call_tool(
+                    "action_run",
+                    {
+                        "doc_type": "inline",
+                        "doc_svg": "<svg><circle/></svg>",
+                        "actions": ["export-type:png"],
+                    },
+                )
+            assert any(
+                word in str(exc_info.value).lower()
+                for word in ["unsafe", "action", "not allowed"]
+            )
+
+    @pytest.mark.asyncio
+    async def test_export_dpi_blocked_in_actions(self, test_config):
+        """export-dpi must be rejected when passed in actions list."""
+        async with Client(app) as client:
+            with pytest.raises(Exception) as exc_info:
+                await client.call_tool(
+                    "action_run",
+                    {
+                        "doc_type": "inline",
+                        "doc_svg": "<svg><circle/></svg>",
+                        "actions": ["export-dpi:300"],
+                    },
+                )
+            assert any(
+                word in str(exc_info.value).lower()
+                for word in ["unsafe", "action", "not allowed"]
+            )
+
+
+class TestAttributeInjectionBlocking:
+    """Verify that dom_set rejects event-handler attributes and dangerous
+    protocols so callers cannot inject XSS vectors via attribute setting."""
+
+    @pytest.mark.asyncio
+    async def test_event_handler_attributes_blocked(self, test_config):
+        """on* attributes must be rejected by dom_set."""
+        async with Client(app) as client:
+            test_svg = '<svg xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="20"/></svg>'
+
+            event_attrs = [
+                ("@onload", "alert(1)"),
+                ("@onclick", "evil()"),
+                ("@onmouseover", "steal()"),
+                ("@onerror", "xss()"),
+            ]
+
+            for attr_key, attr_val in event_attrs:
+                with pytest.raises(Exception) as exc_info:
+                    await client.call_tool(
+                        "dom_set",
+                        {
+                            "doc_type": "inline",
+                            "doc_svg": test_svg,
+                            "ops_json": (
+                                f'[{{"selector": {{"type": "css", "value": "circle"}}, '
+                                f'"set": {{"{attr_key}": "{attr_val}"}}}}]'
+                            ),
+                            "save_as": "attr_test.svg",
+                        },
+                    )
+                assert any(
+                    word in str(exc_info.value).lower()
+                    for word in ["event", "handler", "not allowed", "attribute"]
+                ), f"Expected rejection for {attr_key}"
+
+    @pytest.mark.asyncio
+    async def test_javascript_protocol_in_href_blocked(self, test_config):
+        """javascript: URI in href must be rejected by dom_set."""
+        async with Client(app) as client:
+            test_svg = '<svg xmlns="http://www.w3.org/2000/svg"><a><circle cx="50" cy="50" r="20"/></a></svg>'
+
+            with pytest.raises(Exception) as exc_info:
+                await client.call_tool(
+                    "dom_set",
+                    {
+                        "doc_type": "inline",
+                        "doc_svg": test_svg,
+                        "ops_json": (
+                            '[{"selector": {"type": "css", "value": "a"}, '
+                            '"set": {"@href": "javascript:alert(1)"}}]'
+                        ),
+                        "save_as": "href_test.svg",
+                    },
+                )
+            assert any(
+                word in str(exc_info.value).lower()
+                for word in ["dangerous", "protocol", "javascript", "not allowed"]
+            )
+
+
+class TestSVGSanitizationOnSave:
+    """Verify that dom_set strips dangerous content from the source SVG before
+    writing, so pre-existing <script> tags and on* attributes cannot survive
+    to disk even if they were already present in the input file."""
+
+    @pytest.mark.asyncio
+    async def test_script_elements_stripped_on_save(self, test_config):
+        """<script> elements in the source SVG must be stripped on save."""
+        async with Client(app) as client:
+            svg_with_script = (
+                '<svg xmlns="http://www.w3.org/2000/svg">'
+                "<script>alert('xss')</script>"
+                '<circle cx="50" cy="50" r="20"/>'
+                "</svg>"
+            )
+
+            result = await client.call_tool(
+                "dom_set",
+                {
+                    "doc_type": "inline",
+                    "doc_svg": svg_with_script,
+                    "ops_json": (
+                        '[{"selector": {"type": "css", "value": "circle"}, '
+                        '"set": {"@fill": "red"}}]'
+                    ),
+                    "save_as": "sanitize_test.svg",
+                },
+            )
+            assert result.data.get("ok") is True
+
+            # Verify the saved file has no <script> element
+            out_path = test_config.workspace / "sanitize_test.svg"
+            content = out_path.read_text()
+            assert "<script" not in content.lower(), (
+                "<script> element must not survive to saved SVG"
+            )
+
+    @pytest.mark.asyncio
+    async def test_existing_event_handlers_stripped_on_save(self, test_config):
+        """on* attributes already present in the source must be stripped on save."""
+        async with Client(app) as client:
+            svg_with_handlers = (
+                '<svg xmlns="http://www.w3.org/2000/svg">'
+                '<circle cx="50" cy="50" r="20" onload="steal()"/>'
+                "</svg>"
+            )
+
+            result = await client.call_tool(
+                "dom_set",
+                {
+                    "doc_type": "inline",
+                    "doc_svg": svg_with_handlers,
+                    "ops_json": (
+                        '[{"selector": {"type": "css", "value": "circle"}, '
+                        '"set": {"@fill": "blue"}}]'
+                    ),
+                    "save_as": "handler_strip_test.svg",
+                },
+            )
+            assert result.data.get("ok") is True
+
+            out_path = test_config.workspace / "handler_strip_test.svg"
+            content = out_path.read_text()
+            assert "onload" not in content.lower(), (
+                "onload attribute must not survive to saved SVG"
+            )
+
+    @pytest.mark.asyncio
+    async def test_foreign_object_stripped_on_save(self, test_config):
+        """<foreignObject> elements must be stripped on save."""
+        async with Client(app) as client:
+            svg_with_foreign = (
+                '<svg xmlns="http://www.w3.org/2000/svg">'
+                "<foreignObject><body xmlns='http://www.w3.org/1999/xhtml'>"
+                "<script>evil()</script></body></foreignObject>"
+                '<circle cx="50" cy="50" r="20"/>'
+                "</svg>"
+            )
+
+            result = await client.call_tool(
+                "dom_set",
+                {
+                    "doc_type": "inline",
+                    "doc_svg": svg_with_foreign,
+                    "ops_json": (
+                        '[{"selector": {"type": "css", "value": "circle"}, '
+                        '"set": {"@fill": "green"}}]'
+                    ),
+                    "save_as": "foreign_strip_test.svg",
+                },
+            )
+            assert result.data.get("ok") is True
+
+            out_path = test_config.workspace / "foreign_strip_test.svg"
+            content = out_path.read_text()
+            assert "foreignobject" not in content.lower(), (
+                "foreignObject must not survive to saved SVG"
+            )
+
+
 class TestCrossToolSecurityConsistency:
     """Test that security boundaries are consistently enforced across CLI and
     DOM tools."""

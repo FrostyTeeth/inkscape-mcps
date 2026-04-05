@@ -30,6 +30,65 @@ SEM: anyio.Semaphore | None = None
 # Safe CSS selector pattern - simple subset
 SAFE_SEL = re.compile(r"^[a-zA-Z0-9#.\-\s,>*]+$")
 
+# Dangerous SVG element names (local, without namespace prefix)
+_DANGEROUS_SVG_ELEMENTS = frozenset({
+    "script", "foreignObject", "object", "embed", "iframe",
+})
+
+# Dangerous URI protocols to block in link-like attributes
+_DANGEROUS_PROTOCOLS = ("javascript:", "vbscript:", "data:")
+
+
+def _validate_svg_attribute(name: str, value: str) -> None:
+    """Raise ValueError if attribute name or value is unsafe to set.
+
+    Blocks event-handler attributes (on*) and dangerous protocols in
+    href/src/action attributes.  Called before every n.set() in dom_set.
+    """
+    if name.lower().startswith("on"):
+        raise ValueError(f"Event handler attribute not allowed: {name}")
+    if name in ("href", "xlink:href", "src", "action"):
+        val_lower = value.lower().strip()
+        for proto in _DANGEROUS_PROTOCOLS:
+            if val_lower.startswith(proto):
+                raise ValueError(f"Dangerous protocol in attribute {name!r}")
+
+
+def _sanitize_tree(root: inkex.SvgDocumentElement) -> None:
+    """Strip dangerous elements and attributes from an SVG tree in-place.
+
+    Removes <script>, <foreignObject>, <object>, <embed>, and <iframe>
+    elements; strips all on* event-handler attributes; and removes
+    javascript:/vbscript:/data: protocols from href/src values.
+    Called before every write in _dom_set_impl so that pre-existing
+    dangerous content in the source file cannot survive to disk.
+    """
+    # --- Remove dangerous elements (collect first to avoid mutation-during-iteration) ---
+    to_remove = [
+        el for el in root.iter()
+        if (lambda tag: tag.split("}")[-1] if "}" in tag else tag)(el.tag)
+        in _DANGEROUS_SVG_ELEMENTS
+    ]
+    for el in to_remove:
+        parent = el.getparent()
+        if parent is not None:
+            parent.remove(el)
+
+    # --- Strip dangerous attributes from remaining elements ---
+    for el in root.iter():
+        attrs_to_delete = []
+        for attr_name, attr_value in el.attrib.items():
+            local = attr_name.split("}")[-1] if "}" in attr_name else attr_name
+            if local.lower().startswith("on"):
+                attrs_to_delete.append(attr_name)
+            elif local in ("href", "src", "action"):
+                val_lower = attr_value.lower().strip()
+                if any(val_lower.startswith(p) for p in _DANGEROUS_PROTOCOLS):
+                    attrs_to_delete.append(attr_name)
+        for attr_name in attrs_to_delete:
+            del el.attrib[attr_name]
+
+
 # Unsafe patterns that should be blocked
 UNSAFE_PATTERNS = [
     re.compile(r"//"),  # XPath syntax
@@ -270,8 +329,13 @@ async def _dom_set_impl(doc: Doc, ops: list[SetOp], save_as: str) -> dict:
                             st[k[6:]] = v
                             n.style = st
                         elif k.startswith("@"):
-                            n.set(k[1:], str(v))
+                            attr_name = k[1:]
+                            attr_value = str(v)
+                            _validate_svg_attribute(attr_name, attr_value)
+                            n.set(attr_name, attr_value)
                     changed += 1
+
+            _sanitize_tree(root)
 
             out_path = _ensure_in_workspace(Path(args.save_as))
             # Use BytesIO for tree writing, then decode to string

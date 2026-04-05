@@ -85,10 +85,9 @@ SAFE_ACTIONS = {
     "selection-ungroup",
     "export-area-page",
     "export-area-drawing",
-    "export-type",
-    "export-filename",
-    "export-dpi",
-    "export-do",
+    # export-type, export-filename, export-dpi, export-do are intentionally
+    # absent from this allowlist — they are internal actions emitted only by
+    # _mk_cmd() via the validated Export model and must not be user-passable.
     "file-save",
     "file-close",
     "transform-translate",
