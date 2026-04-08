@@ -128,6 +128,11 @@ def _resolve_inkscape_executable() -> str:
         if resolved:
             return resolved
 
+    # macOS: check standard .app bundle location
+    mac_app = Path("/Applications/Inkscape.app/Contents/MacOS/inkscape")
+    if mac_app.is_file():
+        return str(mac_app)
+
     raise ToolError(
         "Inkscape executable not found. Install Inkscape and ensure it is "
         "on your PATH, or set INKS_INKSCAPE_BIN to its full path."
