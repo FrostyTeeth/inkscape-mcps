@@ -12,8 +12,9 @@ import anyio
 import inkex
 from fastmcp import Context, FastMCP
 from fastmcp.exceptions import ToolError, ValidationError
+from lxml import etree
 from pydantic import BaseModel, field_validator
-from scour.scour import scourString
+from scour.scour import generateDefaultOptions, scourString
 
 from .config import InkscapeConfig
 
@@ -31,12 +32,40 @@ SEM: anyio.Semaphore | None = None
 SAFE_SEL = re.compile(r"^[a-zA-Z0-9#.\-\s,>*]+$")
 
 # Dangerous SVG element names (local, without namespace prefix)
-_DANGEROUS_SVG_ELEMENTS = frozenset({
-    "script", "foreignObject", "object", "embed", "iframe",
-})
+_DANGEROUS_SVG_ELEMENTS = frozenset(
+    {
+        "script",
+        "foreignObject",
+        "object",
+        "embed",
+        "iframe",
+    }
+)
 
 # Dangerous URI protocols to block in link-like attributes
 _DANGEROUS_PROTOCOLS = ("javascript:", "vbscript:", "data:")
+
+# Control characters that can disguise protocol strings (U+0000–U+001F, U+007F)
+_CTRL_CHARS = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _strict_xml_check(text: str) -> None:
+    """Pre-check SVG text for well-formedness and XXE hazards.
+
+    Uses a hardened lxml parser with external entity resolution and DTD
+    loading disabled.  Raises ValidationError on any XML syntax error.
+    """
+    strict_parser = etree.XMLParser(
+        recover=False,
+        no_network=True,
+        resolve_entities=False,
+        dtd_validation=False,
+        load_dtd=False,
+    )
+    try:
+        etree.fromstring(text.encode("utf-8"), parser=strict_parser)
+    except etree.XMLSyntaxError as xml_err:
+        raise ValidationError(f"Malformed XML: {xml_err}") from xml_err
 
 
 def _validate_svg_attribute(name: str, value: str) -> None:
@@ -47,8 +76,12 @@ def _validate_svg_attribute(name: str, value: str) -> None:
     """
     if name.lower().startswith("on"):
         raise ValueError(f"Event handler attribute not allowed: {name}")
-    if name in ("href", "xlink:href", "src", "action"):
-        val_lower = value.lower().strip()
+    # Normalize Clark notation ({ns}local) to local name for comparison
+    local_name = name.split("}")[-1] if "}" in name else name
+    if local_name in ("href", "xlink:href", "src", "action"):
+        # Strip control characters that can disguise protocol strings
+        sanitized = _CTRL_CHARS.sub("", value)
+        val_lower = sanitized.lower().strip()
         for proto in _DANGEROUS_PROTOCOLS:
             if val_lower.startswith(proto):
                 raise ValueError(f"Dangerous protocol in attribute {name!r}")
@@ -63,9 +96,11 @@ def _sanitize_tree(root: inkex.SvgDocumentElement) -> None:
     Called before every write in _dom_set_impl so that pre-existing
     dangerous content in the source file cannot survive to disk.
     """
-    # --- Remove dangerous elements (collect first to avoid mutation-during-iteration) ---
+    # --- Remove dangerous elements ---
+    # (collect first to avoid mutation-during-iteration)
     to_remove = [
-        el for el in root.iter()
+        el
+        for el in root.iter()
         if (lambda tag: tag.split("}")[-1] if "}" in tag else tag)(el.tag)
         in _DANGEROUS_SVG_ELEMENTS
     ]
@@ -106,6 +141,8 @@ UNSAFE_PATTERNS = [
 def _init_config(config: InkscapeConfig | None = None) -> None:
     """Initialize global configuration and semaphore."""
     global CFG, SEM
+    if config is not None and CFG is config:
+        return
     CFG = config or InkscapeConfig()
     SEM = anyio.Semaphore(CFG.max_concurrent)
 
@@ -219,19 +256,20 @@ async def _dom_validate_impl(doc: Doc) -> dict:
     async with SEM:
         try:
             txt = _load_svg_text(doc)
-            # Handle SVGs with XML declarations that require bytes input
+
+            # Strict XML pre-check — inkex uses recover=True internally, so we
+            # catch malformed XML here before it silently succeeds.
+            _strict_xml_check(txt)
+
+            # Full inkex-level validation (namespace, SVG structure)
             if txt.strip().startswith("<?xml") and "encoding=" in txt:
-                # Convert to bytes for lxml parsing
                 inkex.load_svg(io.BytesIO(txt.encode("utf-8")))
             else:
                 inkex.load_svg(io.StringIO(txt))
-            # Just verify we can load it - tree is unused but validates structure
             return {"ok": True}
         except ValidationError:
-            # Re-raise validation errors (workspace, size limits, etc.) without wrapping
             raise
         except FileNotFoundError as e:
-            # Re-raise file not found errors with descriptive message
             raise ValidationError("File not found") from e
         except Exception as e:
             raise ValidationError("ParseError") from e
@@ -254,6 +292,7 @@ async def _dom_set_impl(doc: Doc, ops: list[SetOp], save_as: str) -> dict:
     async with SEM:
         try:
             txt = _load_svg_text(args.doc)
+            _strict_xml_check(txt)
             # Handle SVGs with XML declarations that require bytes input
             if txt.strip().startswith("<?xml") and "encoding=" in txt:
                 # Convert to bytes for lxml parsing
@@ -278,6 +317,7 @@ async def _dom_set_impl(doc: Doc, ops: list[SetOp], save_as: str) -> dict:
                     xpath = "//svg:text"
                 elif selector == "*":
                     xpath = "//*"
+                # SAFETY: SAFE_SEL regex ensures no quotes or XPath metacharacters
                 elif selector.startswith("#"):
                     # ID selector: #myid -> //*[@id='myid']
                     xpath = f"//*[@id='{selector[1:]}']"
@@ -347,6 +387,8 @@ async def _dom_set_impl(doc: Doc, ops: list[SetOp], save_as: str) -> dict:
 
         except ValidationError:
             raise
+        except ValueError as e:
+            raise ToolError(str(e)) from e
         except Exception as e:
             raise ToolError("DOM mutation failed") from e
 
@@ -363,13 +405,36 @@ async def _dom_clean_impl(doc: Doc, save_as: str) -> dict:
         raise ToolError("Server not initialized")
 
     async with SEM:
-        txt = _load_svg_text(doc)
-        cleaned = scourString(
-            txt, options={"remove_metadata": True, "enable_viewboxing": True}
-        )
-        out_path = _ensure_in_workspace(Path(save_as))
-        _atomic_write(out_path, cleaned)
-        return {"ok": True, "out": str(out_path)}
+        try:
+            txt = _load_svg_text(doc)
+            _strict_xml_check(txt)
+            options = generateDefaultOptions()
+            options.remove_metadata = True
+            options.enable_viewboxing = True
+            options.strip_comments = True
+            options.remove_unreferenced_ids = True
+            try:
+                cleaned = scourString(txt, options=options)
+            except Exception as e:
+                raise ToolError("scour failed") from e
+
+            # Re-parse and sanitize scour output before writing to disk
+            if cleaned.strip().startswith("<?xml") and "encoding=" in cleaned:
+                tree = inkex.load_svg(io.BytesIO(cleaned.encode("utf-8")))
+            else:
+                tree = inkex.load_svg(io.StringIO(cleaned))
+            _sanitize_tree(tree.getroot())
+
+            out_path = _ensure_in_workspace(Path(save_as))
+            out_buf = io.BytesIO()
+            tree.write(out_buf, encoding="utf-8", xml_declaration=True)
+            _atomic_write(out_path, out_buf.getvalue().decode("utf-8"))
+            return {"ok": True, "out": str(out_path)}
+
+        except (ValidationError, ToolError):
+            raise
+        except Exception as e:
+            raise ToolError("DOM clean failed") from e
 
 
 @tool("dom_clean")

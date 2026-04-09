@@ -1,6 +1,7 @@
 """Configuration management for Inkscape MCP servers."""
 
 import os
+from functools import lru_cache
 from pathlib import Path
 
 from pydantic import BaseModel, Field
@@ -10,9 +11,9 @@ class InkscapeConfig(BaseModel):
     """Configuration for Inkscape MCP servers."""
 
     workspace: Path = Field(
-        default_factory=lambda: Path(os.getenv("INKS_WORKSPACE", "inkspace"))
-        .expanduser()
-        .resolve()
+        default_factory=lambda: (
+            Path(os.getenv("INKS_WORKSPACE", "inkspace")).expanduser().resolve()
+        )
     )
     max_file_size: int = Field(
         default_factory=lambda: int(os.getenv("INKS_MAX_FILE", str(50 * 1024 * 1024)))
@@ -41,5 +42,7 @@ class InkscapeConfig(BaseModel):
         )
 
 
-# Global default config instance
-default_config = InkscapeConfig()
+@lru_cache(maxsize=1)
+def get_default_config() -> InkscapeConfig:
+    """Return the process-wide default InkscapeConfig, created on first call."""
+    return InkscapeConfig()

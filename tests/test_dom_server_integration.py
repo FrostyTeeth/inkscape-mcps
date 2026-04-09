@@ -112,18 +112,18 @@ class TestDOMServerMCPIntegration:
 
     @pytest.mark.asyncio
     async def test_dom_validate_malformed_svg(self, test_config):
-        """Test: dom_validate handles malformed SVG gracefully."""
+        """Test: dom_validate rejects malformed XML."""
         async with Client(app) as client:
             malformed_svg = "<svg><circle/><invalid></svg>"  # Missing closing tag
 
-            # inkex handles malformed SVG gracefully with warnings, so this should
-            # succeed
-            result = await client.call_tool(
-                "dom_validate", {"doc": {"type": "inline", "svg": malformed_svg}}
+            with pytest.raises(Exception) as exc_info:
+                await client.call_tool(
+                    "dom_validate", {"doc": {"type": "inline", "svg": malformed_svg}}
+                )
+            error_msg = str(exc_info.value).lower()
+            assert (
+                "malformed" in error_msg or "xml" in error_msg or "parse" in error_msg
             )
-            # Should succeed even with malformed SVG (inkex is forgiving)
-            assert isinstance(result.data, dict)
-            assert result.data.get("ok") is True
 
     @pytest.mark.asyncio
     async def test_dom_set_tool_color_changes(self, test_config, test_svg_content):
@@ -261,8 +261,12 @@ class TestDOMServerMCPIntegration:
 
             # Verify the file was processed (should have XML declaration and be
             # properly formatted)
-            assert cleaned_content.startswith('<?xml version="1.0"')
+            assert cleaned_content.startswith("<?xml version=")
             assert "svg" in cleaned_content
+
+            # scour must now strip metadata and comments
+            assert "<metadata" not in cleaned_content
+            assert "<!--" not in cleaned_content
 
             # Should be smaller or same size (optimization occurred)
             original_size = len(messy_svg_content)

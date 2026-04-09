@@ -396,17 +396,18 @@ class TestInputValidationViaMCP:
 
     @pytest.mark.asyncio
     async def test_malformed_svg_handling(self, test_config):
-        """Test: Malformed SVG is handled gracefully via MCP."""
+        """Test: Malformed SVG is rejected by dom_validate."""
         async with Client(app) as client:
-            # Inkex is forgiving and handles malformed SVG gracefully
             malformed_svg = "not xml at all"
 
-            # Should not raise exception - inkex handles malformed SVG gracefully
-            result = await client.call_tool(
-                "dom_validate", {"doc_type": "inline", "doc_svg": malformed_svg}
+            with pytest.raises(Exception) as exc_info:
+                await client.call_tool(
+                    "dom_validate", {"doc_type": "inline", "doc_svg": malformed_svg}
+                )
+            error_msg = str(exc_info.value).lower()
+            assert (
+                "malformed" in error_msg or "xml" in error_msg or "parse" in error_msg
             )
-            # Should return success even for malformed SVG (inkex is forgiving)
-            assert result.data.get("ok") is True
 
 
 class TestConfigurationSafetyViaMCP:
@@ -534,7 +535,10 @@ class TestAttributeInjectionBlocking:
     async def test_event_handler_attributes_blocked(self, test_config):
         """on* attributes must be rejected by dom_set."""
         async with Client(app) as client:
-            test_svg = '<svg xmlns="http://www.w3.org/2000/svg"><circle cx="50" cy="50" r="20"/></svg>'
+            test_svg = (
+                '<svg xmlns="http://www.w3.org/2000/svg">'
+                '<circle cx="50" cy="50" r="20"/></svg>'
+            )
 
             event_attrs = [
                 ("@onload", "alert(1)"),
@@ -566,7 +570,10 @@ class TestAttributeInjectionBlocking:
     async def test_javascript_protocol_in_href_blocked(self, test_config):
         """javascript: URI in href must be rejected by dom_set."""
         async with Client(app) as client:
-            test_svg = '<svg xmlns="http://www.w3.org/2000/svg"><a><circle cx="50" cy="50" r="20"/></a></svg>'
+            test_svg = (
+                '<svg xmlns="http://www.w3.org/2000/svg">'
+                '<a><circle cx="50" cy="50" r="20"/></a></svg>'
+            )
 
             with pytest.raises(Exception) as exc_info:
                 await client.call_tool(

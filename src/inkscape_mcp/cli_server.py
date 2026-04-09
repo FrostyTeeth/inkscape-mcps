@@ -1,5 +1,6 @@
 """CLI-based Inkscape MCP server for actions and exports."""
 
+import logging
 import os
 import platform
 import shutil
@@ -20,6 +21,7 @@ from pydantic import BaseModel, Field, field_validator
 from .config import InkscapeConfig
 
 app = FastMCP("inkscape-cli")
+logger = logging.getLogger(__name__)
 
 # Type-safe decorator cast for ty compatibility
 F = TypeVar("F", bound=Callable[..., object])
@@ -33,6 +35,8 @@ SEM: anyio.Semaphore | None = None
 def _init_config(config: InkscapeConfig | None = None) -> None:
     """Initialize global configuration and semaphore."""
     global CFG, SEM
+    if config is not None and CFG is config:
+        return
     CFG = config or InkscapeConfig()
     SEM = anyio.Semaphore(CFG.max_concurrent)
 
@@ -321,7 +325,7 @@ def _execute_subprocess(
         stdout, stderr = proc.communicate(timeout=timeout)
     except subprocess.TimeoutExpired:
         _handle_timeout(proc)
-        raise ToolError("Operation timed out") from None
+        raise ToolError("Inkscape timeout") from None
 
     if proc.returncode != 0:
         raise ToolError("inkscape failed")
@@ -347,14 +351,14 @@ def _cleanup(infile: Path, is_inline: bool, tmp_export: Path | None) -> None:
     if is_inline:
         try:
             infile.unlink(missing_ok=True)
-        except Exception:
-            pass
+        except OSError as e:
+            logger.debug("Cleanup failed for %s: %s", infile, e)
     # Cleanup tmp export if still present
     if tmp_export:
         try:
             Path(tmp_export).unlink(missing_ok=True)
-        except Exception:
-            pass
+        except OSError as e:
+            logger.debug("Cleanup failed for %s: %s", tmp_export, e)
 
 
 async def _action_run_impl(

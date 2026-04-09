@@ -53,8 +53,8 @@ async def action_run(
     timeout_s: int | None = None,
 ) -> dict:
     """Run Inkscape actions on a document."""
-    logger.debug(f"action_run called with doc: {doc} (type: {type(doc)})")
-    logger.debug(f"actions: {actions}, export: {export}, timeout_s: {timeout_s}")
+    logger.debug("action_run called with doc: %s (type: %s)", doc, type(doc))
+    logger.debug("actions: %s, export: %s, timeout_s: %s", actions, export, timeout_s)
     if CFG is None:
         raise ToolError("Config not initialized")
     cli_server._init_config(CFG)
@@ -66,7 +66,7 @@ async def action_run(
 @flatten_pydantic_params
 async def dom_validate(ctx: Context, doc: dom_server.Doc) -> dict:
     """Validate SVG document structure."""
-    logger.debug(f"dom_validate called with doc: {doc} (type: {type(doc)})")
+    logger.debug("dom_validate called with doc: %s (type: %s)", doc, type(doc))
     if CFG is None:
         raise ToolError("Config not initialized")
     dom_server._init_config(CFG)
