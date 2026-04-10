@@ -98,6 +98,7 @@ async def dom_clean(ctx: Context, doc: dom_server.Doc, save_as: str) -> dict:
 def main(config: InkscapeConfig | None = None) -> None:
     """Main entry point for combined server."""
     _init_config(config)
+    cli_server._resolve_inkscape_executable()  # Validate binary at startup; raises ToolError if not found
     app.run()
 
 

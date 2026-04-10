@@ -50,7 +50,10 @@ def _ensure_in_workspace(p: Path) -> Path:
         p_resolved == workspace_resolved
         or str(p_resolved).startswith(str(workspace_resolved) + os.sep)
     ):
-        raise ValidationError("Path escapes workspace")
+        raise ValidationError(
+            "Path must be relative to the workspace directory "
+            "(e.g. 'output.svg' or 'subdir/output.svg'), not an absolute or escaping path"
+        )
     return p_resolved
 
 
@@ -127,6 +130,11 @@ def _resolve_inkscape_executable() -> str:
         resolved = shutil.which(candidate)
         if resolved:
             return resolved
+
+    # macOS: check standard .app bundle location
+    mac_app = Path("/Applications/Inkscape.app/Contents/MacOS/inkscape")
+    if mac_app.is_file():
+        return str(mac_app)
 
     raise ToolError(
         "Inkscape executable not found. Install Inkscape and ensure it is "
@@ -413,6 +421,7 @@ async def action_run(
 def main(config: InkscapeConfig | None = None) -> None:
     """Main entry point for CLI server."""
     _init_config(config)
+    _resolve_inkscape_executable()  # Validate binary at startup; raises ToolError if not found
     app.run()
 
 

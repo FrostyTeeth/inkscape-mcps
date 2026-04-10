@@ -123,7 +123,10 @@ def _ensure_in_workspace(p: Path) -> Path:
         p_resolved == workspace_resolved
         or str(p_resolved).startswith(str(workspace_resolved) + os.sep)
     ):
-        raise ValidationError("Path escapes workspace")
+        raise ValidationError(
+            "Path must be relative to the workspace directory "
+            "(e.g. 'output.svg' or 'subdir/output.svg'), not an absolute or escaping path"
+        )
     return p_resolved
 
 
@@ -348,7 +351,7 @@ async def _dom_set_impl(doc: Doc, ops: list[SetOp], save_as: str) -> dict:
         except ValidationError:
             raise
         except Exception as e:
-            raise ToolError("DOM mutation failed") from e
+            raise ToolError(f"DOM mutation failed: {e}") from e
 
 
 @tool("dom_set")

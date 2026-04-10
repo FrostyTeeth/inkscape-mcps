@@ -40,14 +40,17 @@ def flatten_pydantic_params(func):
                     True,
                 )  # True indicates list
 
-                # Create a single JSON string parameter for the list
+                # Create a single JSON string parameter for the list.
+                # Preserve the original default if one exists; otherwise keep
+                # the parameter required (no default) so the tool schema does
+                # not imply that an empty list is a valid no-op call.
                 json_param = inspect.Parameter(
                     f"{param_name}_json",
                     inspect.Parameter.POSITIONAL_OR_KEYWORD,
                     annotation=str,
                     default=param.default
                     if param.default != inspect.Parameter.empty
-                    else "[]",
+                    else inspect.Parameter.empty,
                 )
 
                 if json_param.default == inspect.Parameter.empty:
