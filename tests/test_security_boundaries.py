@@ -445,7 +445,7 @@ class TestConfigurationSafetyViaMCP:
                 assert isinstance(result.data, dict)
             except Exception as e:
                 # Expected if timeout occurs or Inkscape not available
-                expected_errors = ["inkscape", "not found", "timeout"]
+                expected_errors = ["inkscape", "not found", "timeout", "timed out"]
                 assert any(err in str(e).lower() for err in expected_errors)
 
 
