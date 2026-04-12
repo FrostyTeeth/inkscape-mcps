@@ -107,6 +107,18 @@ async def create_shape(
     return await dom_server._create_shape_impl(doc, shape, save_as)
 
 
+@tool("create_layer")
+@flatten_pydantic_params
+async def create_layer(
+    ctx: Context, doc: dom_server.Doc, layer: dom_server.LayerSpec, save_as: str
+) -> dict:
+    """Append a new Inkscape layer (<g inkscape:groupmode="layer">) to the SVG."""
+    if CFG is None:
+        raise ToolError("Config not initialized")
+    dom_server._init_config(CFG)
+    return await dom_server._create_layer_impl(doc, layer, save_as)
+
+
 def main(config: InkscapeConfig | None = None) -> None:
     """Main entry point for combined server."""
     _init_config(config)

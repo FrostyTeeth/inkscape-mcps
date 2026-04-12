@@ -307,6 +307,31 @@ def _atomic_write(path: Path, text: str) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Layer helpers
+# ---------------------------------------------------------------------------
+
+def _name_is_safe(name: str) -> None:
+    """Reject layer names with unsafe characters that could cause attribute injection."""
+    if not name or len(name) > 80:
+        raise ValidationError("Layer name must be 1-80 characters")
+    if any(c in name for c in '<>"\'&\x00'):
+        raise ValidationError("Layer name contains unsafe characters")
+
+
+def _ensure_inkscape_namespace(root: inkex.SvgDocumentElement) -> None:
+    """Ensure the Inkscape namespace is reachable from the document root.
+
+    lxml manages namespace declarations automatically: when a child element is
+    created with nsmap={"inkscape": INKSCAPE_NS} (as done in _create_layer_impl),
+    the namespace is already scoped to that child.  This function is a no-op
+    hook for future use; direct attrib mutation of xmlns: prefixes is not
+    supported by lxml and is therefore intentionally avoided here.
+    """
+    # Namespace propagation is handled by lxml via the child nsmap; nothing
+    # extra is needed here — the URI will appear in the serialised output.
+
+
+# ---------------------------------------------------------------------------
 # ShapeSpec model
 # ---------------------------------------------------------------------------
 
@@ -541,6 +566,99 @@ async def _create_shape_impl(doc: Doc, shape: ShapeSpec, save_as: str) -> dict:
 async def create_shape(ctx: Context, doc: Doc, shape: ShapeSpec, save_as: str) -> dict:
     """Append a new SVG shape element to the document root or a specified parent."""
     return await _create_shape_impl(doc, shape, save_as)
+
+
+# ---------------------------------------------------------------------------
+# LayerSpec model
+# ---------------------------------------------------------------------------
+
+class LayerSpec(BaseModel):
+    """Specification for an Inkscape layer (<g inkscape:groupmode="layer">)."""
+
+    name: str
+    id: str | None = None
+    parent_id: str | None = None  # nest into an existing layer
+
+
+async def _create_layer_impl(doc: Doc, layer: LayerSpec, save_as: str) -> dict:
+    """Internal implementation for create_layer."""
+    if SEM is None:
+        raise ToolError("Server not initialized")
+
+    # Validate inputs before acquiring the semaphore
+    _name_is_safe(layer.name)
+    if layer.id is not None:
+        try:
+            _validate_id(layer.id)
+        except ValueError as e:
+            raise ToolError(str(e)) from e
+    if layer.parent_id is not None:
+        try:
+            _validate_id(layer.parent_id)
+        except ValueError as e:
+            raise ToolError(str(e)) from e
+
+    async with SEM:
+        try:
+            txt = _load_svg_text(doc)
+            if txt.strip().startswith("<?xml") and "encoding=" in txt:
+                tree = inkex.load_svg(io.BytesIO(txt.encode("utf-8")))
+            else:
+                tree = inkex.load_svg(io.StringIO(txt))
+
+            root = tree.getroot()
+
+            # Check for duplicate id
+            # layer.id has been validated with _validate_id so f-string is safe
+            if layer.id is not None:
+                existing = root.xpath(f"//*[@id='{layer.id}']")
+                if existing:
+                    raise ValidationError(
+                        f"Element with id {layer.id!r} already exists"
+                    )
+
+            # Find parent element
+            # layer.parent_id has been validated with _validate_id so f-string is safe
+            if layer.parent_id is not None:
+                matches = root.xpath(f"//*[@id='{layer.parent_id}']")
+                if not matches:
+                    raise ValidationError(
+                        f"Parent element with id {layer.parent_id!r} not found"
+                    )
+                parent = matches[0]
+            else:
+                parent = root
+
+            # Build the layer <g> element
+            layer_id = layer.id if layer.id is not None else f"layer-{uuid.uuid4().hex[:8]}"
+            g = root.makeelement(
+                f"{{{_SVG_NS}}}g",
+                nsmap={"inkscape": INKSCAPE_NS},
+            )
+            g.set("id", layer_id)
+            g.set(f"{{{INKSCAPE_NS}}}groupmode", "layer")
+            g.set(f"{{{INKSCAPE_NS}}}label", layer.name)
+
+            parent.append(g)
+            _ensure_inkscape_namespace(root)
+
+            out_path = _ensure_in_workspace(Path(save_as))
+            out_buf = io.BytesIO()
+            tree.write(out_buf, encoding="utf-8", xml_declaration=True)
+            _atomic_write(out_path, out_buf.getvalue().decode("utf-8"))
+
+            return {"ok": True, "changed": 1, "out": str(out_path), "id": layer_id}
+
+        except (ValidationError, ToolError):
+            raise
+        except Exception as e:
+            raise ToolError(f"create_layer failed: {e}") from e
+
+
+@tool("create_layer")
+async def create_layer(ctx: Context, doc: Doc, layer: LayerSpec, save_as: str) -> dict:
+    """Append a new Inkscape layer (<g inkscape:groupmode="layer">) to the SVG."""
+    return await _create_layer_impl(doc, layer, save_as)
 
 
 def main(config: InkscapeConfig | None = None) -> None:
