@@ -1071,6 +1071,103 @@ async def duplicate_object(
     return await _duplicate_object_impl(doc, args, save_as)
 
 
+# ---------------------------------------------------------------------------
+# query_dimensions — read-only bbox computation from SVG attributes
+# ---------------------------------------------------------------------------
+
+def _bbox_of(el) -> dict | None:
+    """Compute bounding box of a single SVG element from its attributes.
+
+    Returns dict with x, y, width, height, bbox keys, or None for unsupported tags.
+    """
+    tag = el.tag
+    # Strip namespace: {http://...}rect → rect
+    if tag.startswith("{"):
+        tag = tag.split("}", 1)[1]
+
+    def f(attr, default=None):
+        val = el.get(attr)
+        if val is None:
+            return default
+        try:
+            return float(val)
+        except (ValueError, TypeError):
+            return default
+
+    if tag == "rect":
+        x, y = f("x", 0.0), f("y", 0.0)
+        w, h = f("width", 0.0), f("height", 0.0)
+        return {"x": x, "y": y, "width": w, "height": h,
+                "bbox": {"x1": x, "y1": y, "x2": x + w, "y2": y + h}}
+
+    if tag == "circle":
+        cx, cy, r = f("cx", 0.0), f("cy", 0.0), f("r", 0.0)
+        return {"x": cx - r, "y": cy - r, "width": 2 * r, "height": 2 * r,
+                "bbox": {"x1": cx - r, "y1": cy - r, "x2": cx + r, "y2": cy + r}}
+
+    if tag == "ellipse":
+        cx, cy = f("cx", 0.0), f("cy", 0.0)
+        rx, ry = f("rx", 0.0), f("ry", 0.0)
+        return {"x": cx - rx, "y": cy - ry, "width": 2 * rx, "height": 2 * ry,
+                "bbox": {"x1": cx - rx, "y1": cy - ry, "x2": cx + rx, "y2": cy + ry}}
+
+    if tag == "line":
+        x1, y1 = f("x1", 0.0), f("y1", 0.0)
+        x2, y2 = f("x2", 0.0), f("y2", 0.0)
+        bx1, by1 = min(x1, x2), min(y1, y2)
+        bx2, by2 = max(x1, x2), max(y1, y2)
+        return {"x": bx1, "y": by1, "width": bx2 - bx1, "height": by2 - by1,
+                "bbox": {"x1": bx1, "y1": by1, "x2": bx2, "y2": by2}}
+
+    return None  # unsupported tag
+
+
+class QueryDimensionsArgs(BaseModel):
+    """Arguments for query_dimensions."""
+
+    doc: Doc
+    selector: Selector
+
+
+async def _query_dimensions_impl(doc: Doc, selector: Selector) -> dict:
+    """Internal implementation for query_dimensions (read-only)."""
+    if SEM is None:
+        raise ToolError("Server not initialized")
+
+    async with SEM:
+        txt = _load_svg_text(doc)
+        if txt.strip().startswith("<?xml") and "encoding=" in txt:
+            tree = inkex.load_svg(io.BytesIO(txt.encode("utf-8")))
+        else:
+            tree = inkex.load_svg(io.StringIO(txt))
+
+        root = tree.getroot()
+        matches = _select_nodes(root, selector.value)
+
+        results = []
+        for el in matches:
+            tag = el.tag
+            if tag.startswith("{"):
+                tag = tag.split("}", 1)[1]
+            el_id = el.get("id")
+            bbox_data = _bbox_of(el)
+
+            if bbox_data is not None:
+                entry = {"id": el_id, "tag": tag, **bbox_data}
+            else:
+                entry = {"id": el_id, "tag": tag,
+                         "x": None, "y": None, "width": None, "height": None, "bbox": None}
+            results.append(entry)
+
+        return {"ok": True, "matches": results}
+
+
+@tool("query_dimensions")
+async def query_dimensions(ctx: Context, doc: Doc, selector: Selector) -> dict:
+    """Return width/height/bbox for SVG elements matching a CSS selector (read-only)."""
+    return await _query_dimensions_impl(doc, selector)
+
+
 def main(config: InkscapeConfig | None = None) -> None:
     """Main entry point for DOM server."""
     _init_config(config)

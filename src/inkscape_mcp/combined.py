@@ -179,6 +179,20 @@ async def duplicate_object(
     return await dom_server._duplicate_object_impl(doc, args, save_as)
 
 
+@tool("query_dimensions")
+@flatten_pydantic_params
+async def query_dimensions(
+    ctx: Context,
+    doc: dom_server.Doc,
+    selector: dom_server.Selector,
+) -> dict:
+    """Return width/height/bbox for SVG elements matching a CSS selector (read-only)."""
+    if CFG is None:
+        raise ToolError("Config not initialized")
+    dom_server._init_config(CFG)
+    return await dom_server._query_dimensions_impl(doc, selector)
+
+
 def main(config: InkscapeConfig | None = None) -> None:
     """Main entry point for combined server."""
     _init_config(config)
