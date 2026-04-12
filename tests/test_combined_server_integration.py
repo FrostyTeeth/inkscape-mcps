@@ -444,3 +444,25 @@ class TestCombinedServerWorkflows:
                 # Expected if Inkscape not available or times out
                 expected_errors = ["inkscape", "not found", "timeout"]
                 assert any(err in str(e).lower() for err in expected_errors)
+
+
+@pytest.mark.asyncio
+async def test_create_shape_in_combined(combined_test_config, base_svg):
+    """Smoke test: create_shape works through the combined server."""
+    async with Client(app) as client:
+        result = await client.call_tool(
+            "create_shape",
+            {
+                "doc_type": "inline",
+                "doc_svg": base_svg,
+                "shape_kind": "rect",
+                "shape_attrs": {"x": 5, "width": 40, "height": 20},
+                "save_as": "combined_create_rect.svg",
+            },
+        )
+
+    assert result.data.get("ok") is True
+    out_path = combined_test_config.workspace / "combined_create_rect.svg"
+    assert out_path.exists()
+    content = out_path.read_text()
+    assert content.count("<rect") >= 1

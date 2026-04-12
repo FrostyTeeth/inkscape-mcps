@@ -95,6 +95,18 @@ async def dom_clean(ctx: Context, doc: dom_server.Doc, save_as: str) -> dict:
     return await dom_server._dom_clean_impl(doc, save_as)
 
 
+@tool("create_shape")
+@flatten_pydantic_params
+async def create_shape(
+    ctx: Context, doc: dom_server.Doc, shape: dom_server.ShapeSpec, save_as: str
+) -> dict:
+    """Append a new SVG shape element to the document root or a specified parent."""
+    if CFG is None:
+        raise ToolError("Config not initialized")
+    dom_server._init_config(CFG)
+    return await dom_server._create_shape_impl(doc, shape, save_as)
+
+
 def main(config: InkscapeConfig | None = None) -> None:
     """Main entry point for combined server."""
     _init_config(config)
