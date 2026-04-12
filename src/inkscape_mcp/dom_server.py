@@ -302,6 +302,50 @@ def _atomic_write(path: Path, text: str) -> None:
     os.replace(tmp, path)
 
 
+# ---------------------------------------------------------------------------
+# ShapeSpec model
+# ---------------------------------------------------------------------------
+
+class ShapeSpec(BaseModel):
+    """Specification for a shape element to create."""
+
+    kind: str
+    attrs: dict = {}
+    style: dict = {}
+    id: str | None = None
+    parent_selector: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Shape validation helper
+# ---------------------------------------------------------------------------
+
+def _validate_shape_spec(kind: str, attrs: dict, style: dict) -> None:
+    """Validate shape kind, attrs, and style against allowlists.
+
+    Raises ValueError if any value is not permitted.
+    """
+    if kind not in _ALLOWED_SHAPE_TAGS:
+        raise ValueError(
+            f"Shape kind {kind!r} is not allowed. "
+            f"Allowed kinds: {sorted(_ALLOWED_SHAPE_TAGS)}"
+        )
+
+    for attr_name in attrs:
+        if attr_name not in _ALLOWED_SHAPE_ATTRS:
+            raise ValueError(
+                f"Attribute {attr_name!r} is not allowed. "
+                f"Allowed attrs: {sorted(_ALLOWED_SHAPE_ATTRS)}"
+            )
+
+    for prop_name in style:
+        if prop_name not in _ALLOWED_STYLE_PROPS:
+            raise ValueError(
+                f"Style property {prop_name!r} is not allowed. "
+                f"Allowed props: {sorted(_ALLOWED_STYLE_PROPS)}"
+            )
+
+
 async def _dom_validate_impl(doc: Doc) -> dict:
     """Internal implementation for DOM validation."""
     if SEM is None:
@@ -407,6 +451,96 @@ async def _dom_clean_impl(doc: Doc, save_as: str) -> dict:
 async def dom_clean(ctx: Context, doc: Doc, save_as: str) -> dict:
     """Clean SVG using scour optimizer."""
     return await _dom_clean_impl(doc, save_as)
+
+
+# SVG namespace constant for element creation
+_SVG_NS = "http://www.w3.org/2000/svg"
+
+
+async def _create_shape_impl(doc: Doc, shape: ShapeSpec, save_as: str) -> dict:
+    """Internal implementation for create_shape."""
+    if SEM is None:
+        raise ToolError("Server not initialized")
+
+    # Validate shape spec
+    try:
+        _validate_shape_spec(shape.kind, shape.attrs, shape.style)
+    except ValueError as e:
+        raise ToolError(str(e)) from e
+
+    # Validate/generate element id
+    if shape.id is not None:
+        try:
+            _validate_id(shape.id)
+        except ValueError as e:
+            raise ToolError(str(e)) from e
+        el_id = shape.id
+    else:
+        el_id = f"shape-{uuid.uuid4().hex[:8]}"
+
+    async with SEM:
+        try:
+            txt = _load_svg_text(doc)
+            if txt.strip().startswith("<?xml") and "encoding=" in txt:
+                tree = inkex.load_svg(io.BytesIO(txt.encode("utf-8")))
+            else:
+                tree = inkex.load_svg(io.StringIO(txt))
+
+            root = tree.getroot()
+
+            # Find parent element
+            if shape.parent_selector is not None:
+                nodes = _select_nodes(root, shape.parent_selector)
+                if not nodes:
+                    raise ToolError(
+                        f"No element found for parent_selector: {shape.parent_selector!r}"
+                    )
+                parent = nodes[0]
+            else:
+                parent = root
+
+            # Create the new element
+            el = root.makeelement(f"{{{_SVG_NS}}}{shape.kind}", {})
+
+            # Set attributes
+            for attr_name, attr_value in shape.attrs.items():
+                str_val = str(attr_value)
+                _validate_svg_attribute(attr_name, str_val)
+                el.set(attr_name, str_val)
+
+            # Set style
+            if shape.style:
+                style_str = ";".join(
+                    f"{k}:{v}" for k, v in shape.style.items()
+                )
+                el.set("style", style_str)
+
+            # Set id
+            el.set("id", el_id)
+
+            # Append to parent
+            parent.append(el)
+
+            # Sanitize and write
+            _sanitize_tree(root)
+
+            out_path = _ensure_in_workspace(Path(save_as))
+            out_buf = io.BytesIO()
+            tree.write(out_buf, encoding="utf-8", xml_declaration=True)
+            _atomic_write(out_path, out_buf.getvalue().decode("utf-8"))
+
+            return {"ok": True, "changed": 1, "out": str(out_path), "id": el_id}
+
+        except (ValidationError, ToolError):
+            raise
+        except Exception as e:
+            raise ToolError(f"create_shape failed: {e}") from e
+
+
+@tool("create_shape")
+async def create_shape(ctx: Context, doc: Doc, shape: ShapeSpec, save_as: str) -> dict:
+    """Append a new SVG shape element to the document root or a specified parent."""
+    return await _create_shape_impl(doc, shape, save_as)
 
 
 def main(config: InkscapeConfig | None = None) -> None:
