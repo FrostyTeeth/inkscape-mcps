@@ -1168,6 +1168,131 @@ async def query_dimensions(ctx: Context, doc: Doc, selector: Selector) -> dict:
     return await _query_dimensions_impl(doc, selector)
 
 
+# ---------------------------------------------------------------------------
+# group_objects — wrap matched elements in a new <g>
+# ---------------------------------------------------------------------------
+
+def _document_order_dedupe(nodes: list, root) -> list:
+    """Return nodes in document order, deduped."""
+    node_set = set(id(n) for n in nodes)
+    result = []
+    for el in root.iter():
+        if id(el) in node_set:
+            result.append(el)
+            node_set.discard(id(el))
+    return result
+
+
+class GroupObjectsArgs(BaseModel):
+    """Arguments for group_objects."""
+
+    selectors: list[Selector]   # 1..32 selectors; union of matches is grouped
+    group_id: str | None = None
+
+
+async def _group_objects_impl(
+    doc: Doc, args: GroupObjectsArgs, save_as: str
+) -> dict:
+    """Internal implementation for group_objects."""
+    if SEM is None:
+        raise ToolError("Server not initialized")
+
+    if len(args.selectors) > 32:
+        raise ValidationError("Too many selectors (max 32)")
+
+    if args.group_id is not None:
+        try:
+            _validate_id(args.group_id)
+        except ValueError as e:
+            raise ValidationError(str(e)) from e
+
+    async with SEM:
+        try:
+            txt = _load_svg_text(doc)
+            if txt.strip().startswith("<?xml") and "encoding=" in txt:
+                tree = inkex.load_svg(io.BytesIO(txt.encode("utf-8")))
+            else:
+                tree = inkex.load_svg(io.StringIO(txt))
+
+            root = tree.getroot()
+
+            # Check for duplicate id in the existing document
+            if args.group_id is not None:
+                if root.xpath(f"//*[@id='{args.group_id}']"):
+                    raise ValidationError(
+                        f"Element with id '{args.group_id}' already exists"
+                    )
+
+            # Collect all matches across selectors (deduped)
+            seen_ids: set[int] = set()
+            all_nodes: list = []
+            for sel in args.selectors:
+                for node in _select_nodes(root, sel.value):
+                    nid = id(node)
+                    if nid not in seen_ids:
+                        seen_ids.add(nid)
+                        all_nodes.append(node)
+
+            if not all_nodes:
+                return {"ok": True, "changed": 0, "out": None, "id": None}
+
+            # Sort into document order
+            ordered_nodes = _document_order_dedupe(all_nodes, root)
+
+            # Reject if any match is the root <svg> element
+            if any(n is root for n in ordered_nodes):
+                raise ValidationError("Cannot group the root <svg> element")
+
+            # Create the new <g> element
+            group_id = (
+                args.group_id if args.group_id is not None
+                else f"group-{uuid.uuid4().hex[:8]}"
+            )
+            g = root.makeelement(f"{{{_SVG_NS}}}g", {"id": group_id})
+
+            # Insert <g> where the first matched node was
+            first = ordered_nodes[0]
+            parent = first.getparent()
+            idx = list(parent).index(first)
+            parent.insert(idx, g)
+
+            # Move all matched nodes into <g> (lxml move semantics handle detach)
+            for node in ordered_nodes:
+                g.append(node)
+
+            _sanitize_tree(root)
+
+            out_path = _ensure_in_workspace(Path(save_as))
+            out_buf = io.BytesIO()
+            tree.write(out_buf, encoding="utf-8", xml_declaration=True)
+            _atomic_write(out_path, out_buf.getvalue().decode("utf-8"))
+
+            return {
+                "ok": True,
+                "changed": len(ordered_nodes),
+                "out": str(out_path),
+                "id": group_id,
+            }
+
+        except (ValidationError, ToolError):
+            raise
+        except Exception as e:
+            raise ToolError(f"group_objects failed: {e}") from e
+
+
+@tool("group_objects")
+async def group_objects(
+    ctx: Context,
+    doc: Doc,
+    selectors: list[Selector],
+    save_as: str,
+    group_id: str | None = None,
+) -> dict:
+    """Wrap all elements matching one or more CSS selectors in a new <g> element."""
+    args = GroupObjectsArgs(selectors=selectors, group_id=group_id)
+    return await _group_objects_impl(doc, args, save_as)
+
+
 def main(config: InkscapeConfig | None = None) -> None:
     """Main entry point for DOM server."""
     _init_config(config)

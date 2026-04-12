@@ -193,6 +193,23 @@ async def query_dimensions(
     return await dom_server._query_dimensions_impl(doc, selector)
 
 
+@tool("group_objects")
+@flatten_pydantic_params
+async def group_objects(
+    ctx: Context,
+    doc: dom_server.Doc,
+    selectors: list[dom_server.Selector],
+    save_as: str,
+    group_id: str | None = None,
+) -> dict:
+    """Wrap all elements matching one or more CSS selectors in a new <g> element."""
+    if CFG is None:
+        raise ToolError("Config not initialized")
+    dom_server._init_config(CFG)
+    args = dom_server.GroupObjectsArgs(selectors=selectors, group_id=group_id)
+    return await dom_server._group_objects_impl(doc, args, save_as)
+
+
 def main(config: InkscapeConfig | None = None) -> None:
     """Main entry point for combined server."""
     _init_config(config)
