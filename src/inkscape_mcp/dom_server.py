@@ -105,11 +105,15 @@ UNSAFE_PATTERNS = [
 
 
 # ---------------------------------------------------------------------------
-# Inkscape namespace
+# Namespaces
 # ---------------------------------------------------------------------------
 INKSCAPE_NS = "http://www.inkscape.org/namespaces/inkscape"
+_SVG_NS = "http://www.w3.org/2000/svg"
 
-# Allowlists for shape tags, shape attributes, and style properties
+# ---------------------------------------------------------------------------
+# Shape creation allowlists
+# All three frozensets are used by _validate_shape_spec and create_shape.
+# ---------------------------------------------------------------------------
 _ALLOWED_SHAPE_TAGS: frozenset[str] = frozenset(
     {"rect", "circle", "ellipse", "line", "polygon"}
 )
@@ -451,10 +455,6 @@ async def _dom_clean_impl(doc: Doc, save_as: str) -> dict:
 async def dom_clean(ctx: Context, doc: Doc, save_as: str) -> dict:
     """Clean SVG using scour optimizer."""
     return await _dom_clean_impl(doc, save_as)
-
-
-# SVG namespace constant for element creation
-_SVG_NS = "http://www.w3.org/2000/svg"
 
 
 async def _create_shape_impl(doc: Doc, shape: ShapeSpec, save_as: str) -> dict:
