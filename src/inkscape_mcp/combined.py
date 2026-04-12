@@ -143,6 +143,18 @@ async def set_layer_visibility(
     return await dom_server._set_layer_visibility_impl(doc, layer_id, visible, save_as)
 
 
+@tool("create_gradient")
+@flatten_pydantic_params
+async def create_gradient(
+    ctx: Context, doc: dom_server.Doc, gradient: dom_server.GradientSpec, save_as: str
+) -> dict:
+    """Add a new linear or radial gradient to the SVG <defs> element."""
+    if CFG is None:
+        raise ToolError("Config not initialized")
+    dom_server._init_config(CFG)
+    return await dom_server._create_gradient_impl(doc, gradient, save_as)
+
+
 def main(config: InkscapeConfig | None = None) -> None:
     """Main entry point for combined server."""
     _init_config(config)

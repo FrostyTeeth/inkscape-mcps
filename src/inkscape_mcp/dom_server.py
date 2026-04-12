@@ -807,6 +807,164 @@ async def set_layer_visibility(
     return await _set_layer_visibility_impl(doc, layer_id, visible, save_as)
 
 
+# ---------------------------------------------------------------------------
+# Gradient helpers
+# ---------------------------------------------------------------------------
+
+_COLOR_HEX_RE = re.compile(r"^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$")
+
+
+def _validate_color_hex(value: str) -> str:
+    """Raise ValidationError if *value* is not a 3- or 6-digit hex color."""
+    if not _COLOR_HEX_RE.match(value):
+        raise ValidationError(
+            f"Color must be #rgb or #rrggbb hex, got: {value!r}"
+        )
+    return value
+
+
+def _ensure_defs(root: inkex.SvgDocumentElement) -> inkex.BaseElement:
+    """Find or create the <svg:defs> element as first child of root."""
+    defs_tag = f"{{{_SVG_NS}}}defs"
+    defs = root.find(defs_tag)
+    if defs is None:
+        defs = root.makeelement(defs_tag, {})
+        root.insert(0, defs)
+    return defs
+
+
+# ---------------------------------------------------------------------------
+# GradientStop / GradientSpec models
+# ---------------------------------------------------------------------------
+
+class GradientStop(BaseModel):
+    """A single color stop in a gradient."""
+
+    offset: float           # 0.0..1.0
+    color: str              # "#rrggbb" or "#rgb" only
+    opacity: float = 1.0    # 0.0..1.0
+
+
+class GradientSpec(BaseModel):
+    """Specification for a new SVG gradient element."""
+
+    kind: Literal["linear", "radial"]
+    id: str | None = None
+    stops: list[GradientStop]   # 2..16
+    # linear coords (all optional — default SVG behavior if None)
+    x1: float | None = None
+    y1: float | None = None
+    x2: float | None = None
+    y2: float | None = None
+    # radial coords
+    cx: float | None = None
+    cy: float | None = None
+    r: float | None = None
+
+
+async def _create_gradient_impl(
+    doc: Doc, gradient: GradientSpec, save_as: str
+) -> dict:
+    """Internal implementation for create_gradient."""
+    if SEM is None:
+        raise ToolError("Server not initialized")
+
+    # Validate stops count
+    if len(gradient.stops) < 2:
+        raise ValidationError("gradient requires at least 2 stops")
+    if len(gradient.stops) > 16:
+        raise ValidationError("gradient has too many stops (max 16)")
+
+    # Validate each stop
+    for stop in gradient.stops:
+        _validate_color_hex(stop.color)
+        if not (0.0 <= stop.offset <= 1.0):
+            raise ValidationError(
+                f"stop offset must be 0.0..1.0, got {stop.offset}"
+            )
+        if not (0.0 <= stop.opacity <= 1.0):
+            raise ValidationError(
+                f"stop opacity must be 0.0..1.0, got {stop.opacity}"
+            )
+
+    # Validate id if provided
+    if gradient.id is not None:
+        try:
+            _validate_id(gradient.id)
+        except ValueError as e:
+            raise ValidationError(str(e)) from e
+
+    async with SEM:
+        try:
+            txt = _load_svg_text(doc)
+            if txt.strip().startswith("<?xml") and "encoding=" in txt:
+                tree = inkex.load_svg(io.BytesIO(txt.encode("utf-8")))
+            else:
+                tree = inkex.load_svg(io.StringIO(txt))
+
+            root = tree.getroot()
+            defs = _ensure_defs(root)
+
+            # Choose tag
+            if gradient.kind == "linear":
+                grad_tag = f"{{{_SVG_NS}}}linearGradient"
+            else:
+                grad_tag = f"{{{_SVG_NS}}}radialGradient"
+
+            grad_id = (
+                gradient.id if gradient.id is not None
+                else f"gradient-{uuid.uuid4().hex[:8]}"
+            )
+            grad_el = root.makeelement(grad_tag, {"id": grad_id})
+
+            # Set coordinate attrs if provided
+            coord_pairs = [
+                ("x1", gradient.x1),
+                ("y1", gradient.y1),
+                ("x2", gradient.x2),
+                ("y2", gradient.y2),
+                ("cx", gradient.cx),
+                ("cy", gradient.cy),
+                ("r", gradient.r),
+            ]
+            for attr_name, val in coord_pairs:
+                if val is not None:
+                    grad_el.set(attr_name, str(val))
+
+            # Build stop elements
+            stop_tag = f"{{{_SVG_NS}}}stop"
+            for stop in gradient.stops:
+                stop_el = root.makeelement(stop_tag, {})
+                stop_el.set("offset", str(stop.offset))
+                stop_el.set(
+                    "style",
+                    f"stop-color:{stop.color};stop-opacity:{stop.opacity}",
+                )
+                grad_el.append(stop_el)
+
+            defs.append(grad_el)
+
+            out_path = _ensure_in_workspace(Path(save_as))
+            out_buf = io.BytesIO()
+            tree.write(out_buf, encoding="utf-8", xml_declaration=True)
+            _atomic_write(out_path, out_buf.getvalue().decode("utf-8"))
+
+            return {"ok": True, "changed": 1, "out": str(out_path), "id": grad_id}
+
+        except (ValidationError, ToolError):
+            raise
+        except Exception as e:
+            raise ToolError(f"create_gradient failed: {e}") from e
+
+
+@tool("create_gradient")
+async def create_gradient(
+    ctx: Context, doc: Doc, gradient: GradientSpec, save_as: str
+) -> dict:
+    """Add a new linear or radial gradient to the SVG <defs> element."""
+    return await _create_gradient_impl(doc, gradient, save_as)
+
+
 def main(config: InkscapeConfig | None = None) -> None:
     """Main entry point for DOM server."""
     _init_config(config)
