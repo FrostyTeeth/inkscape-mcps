@@ -1,20 +1,10 @@
 """Security Boundary Tests - FastMCP Idiomatic Testing."""
 
-import tempfile
-from pathlib import Path
-
 import pytest
 from fastmcp import Client
 
 from inkscape_mcp.combined import _init_config, app
 from inkscape_mcp.config import InkscapeConfig
-
-
-@pytest.fixture
-def temp_workspace():
-    """Create a temporary workspace for testing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
 
 
 @pytest.fixture
