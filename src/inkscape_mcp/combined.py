@@ -119,6 +119,18 @@ async def create_layer(
     return await dom_server._create_layer_impl(doc, layer, save_as)
 
 
+@tool("rename_layer")
+@flatten_pydantic_params
+async def rename_layer(
+    ctx: Context, doc: dom_server.Doc, layer_id: str, new_name: str, save_as: str
+) -> dict:
+    """Rename an Inkscape layer by updating its inkscape:label attribute."""
+    if CFG is None:
+        raise ToolError("Config not initialized")
+    dom_server._init_config(CFG)
+    return await dom_server._rename_layer_impl(doc, layer_id, new_name, save_as)
+
+
 def main(config: InkscapeConfig | None = None) -> None:
     """Main entry point for combined server."""
     _init_config(config)

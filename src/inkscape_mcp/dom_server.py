@@ -661,6 +661,85 @@ async def create_layer(ctx: Context, doc: Doc, layer: LayerSpec, save_as: str) -
     return await _create_layer_impl(doc, layer, save_as)
 
 
+# ---------------------------------------------------------------------------
+# rename_layer helpers and implementation
+# ---------------------------------------------------------------------------
+
+def _find_layer_by_id(root: inkex.SvgDocumentElement, layer_id: str):
+    """Find a <g> element that is an Inkscape layer with the given id.
+
+    Returns the element or raises ValidationError.
+    Calls _validate_id first to ensure layer_id is safe before use in XPath.
+    """
+    try:
+        _validate_id(layer_id)
+    except ValueError as e:
+        raise ValidationError(str(e)) from e
+
+    # id is validated — f-string interpolation into XPath is safe
+    matches = root.xpath(f"//*[@id='{layer_id}']")
+    if not matches:
+        raise ValidationError(f"Layer '{layer_id}' not found")
+    el = matches[0]
+
+    groupmode_attr = f"{{{INKSCAPE_NS}}}groupmode"
+    if el.get(groupmode_attr) != "layer":
+        raise ValidationError(f"Element '{layer_id}' is not an Inkscape layer")
+
+    return el
+
+
+class RenameLayerArgs(BaseModel):
+    """Arguments for rename_layer."""
+
+    layer_id: str
+    new_name: str
+
+
+async def _rename_layer_impl(
+    doc: Doc, layer_id: str, new_name: str, save_as: str
+) -> dict:
+    """Internal implementation for rename_layer."""
+    if SEM is None:
+        raise ToolError("Server not initialized")
+
+    _name_is_safe(new_name)
+
+    async with SEM:
+        try:
+            txt = _load_svg_text(doc)
+            if txt.strip().startswith("<?xml") and "encoding=" in txt:
+                tree = inkex.load_svg(io.BytesIO(txt.encode("utf-8")))
+            else:
+                tree = inkex.load_svg(io.StringIO(txt))
+
+            root = tree.getroot()
+            el = _find_layer_by_id(root, layer_id)
+
+            label_attr = f"{{{INKSCAPE_NS}}}label"
+            el.set(label_attr, new_name)
+
+            out_path = _ensure_in_workspace(Path(save_as))
+            out_buf = io.BytesIO()
+            tree.write(out_buf, encoding="utf-8", xml_declaration=True)
+            _atomic_write(out_path, out_buf.getvalue().decode("utf-8"))
+
+            return {"ok": True, "changed": 1, "out": str(out_path), "id": layer_id}
+
+        except (ValidationError, ToolError):
+            raise
+        except Exception as e:
+            raise ToolError(f"rename_layer failed: {e}") from e
+
+
+@tool("rename_layer")
+async def rename_layer(
+    ctx: Context, doc: Doc, layer_id: str, new_name: str, save_as: str
+) -> dict:
+    """Rename an Inkscape layer by updating its inkscape:label attribute."""
+    return await _rename_layer_impl(doc, layer_id, new_name, save_as)
+
+
 def main(config: InkscapeConfig | None = None) -> None:
     """Main entry point for DOM server."""
     _init_config(config)

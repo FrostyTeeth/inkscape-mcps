@@ -230,3 +230,142 @@ class TestCreateLayer:
                         "save_as": "layer_bad_parent.svg",
                     },
                 )
+
+
+class TestRenameLayer:
+    """Tests for the rename_layer tool on dom_server.app."""
+
+    @pytest.mark.asyncio
+    async def test_rename_layer_updates_inkscape_label(
+        self, dom_test_config, layered_svg
+    ):
+        """After rename, the target layer's inkscape:label must equal the new name."""
+        async with Client(dom_server.app) as client:
+            result = await client.call_tool(
+                "rename_layer",
+                {
+                    "doc": {"type": "inline", "svg": layered_svg},
+                    "layer_id": "layer1",
+                    "new_name": "Renamed Layer",
+                    "save_as": "rename_label.svg",
+                },
+            )
+
+        assert result.data.get("ok") is True
+        assert result.data.get("changed") == 1
+
+        out_path = dom_test_config.workspace / "rename_label.svg"
+        assert out_path.exists()
+        content = out_path.read_text()
+        assert 'inkscape:label="Renamed Layer"' in content
+
+    @pytest.mark.asyncio
+    async def test_rename_layer_leaves_other_layers_alone(
+        self, dom_test_config, layered_svg
+    ):
+        """Renaming layer1 must not change layer2's label."""
+        async with Client(dom_server.app) as client:
+            await client.call_tool(
+                "rename_layer",
+                {
+                    "doc": {"type": "inline", "svg": layered_svg},
+                    "layer_id": "layer1",
+                    "new_name": "Only This One",
+                    "save_as": "rename_other_untouched.svg",
+                },
+            )
+
+        out_path = dom_test_config.workspace / "rename_other_untouched.svg"
+        content = out_path.read_text()
+        # layer2 retains its original label
+        assert 'inkscape:label="Layer 2"' in content
+
+    @pytest.mark.asyncio
+    async def test_rename_layer_preserves_id(
+        self, dom_test_config, layered_svg
+    ):
+        """The layer's id attribute must be unchanged after renaming."""
+        async with Client(dom_server.app) as client:
+            result = await client.call_tool(
+                "rename_layer",
+                {
+                    "doc": {"type": "inline", "svg": layered_svg},
+                    "layer_id": "layer1",
+                    "new_name": "New Name",
+                    "save_as": "rename_preserves_id.svg",
+                },
+            )
+
+        assert result.data.get("id") == "layer1"
+        out_path = dom_test_config.workspace / "rename_preserves_id.svg"
+        content = out_path.read_text()
+        assert 'id="layer1"' in content
+
+    @pytest.mark.asyncio
+    async def test_rename_layer_not_found_raises(
+        self, dom_test_config, layered_svg
+    ):
+        """Supplying an id that does not exist must raise an error."""
+        with pytest.raises(Exception):
+            async with Client(dom_server.app) as client:
+                await client.call_tool(
+                    "rename_layer",
+                    {
+                        "doc": {"type": "inline", "svg": layered_svg},
+                        "layer_id": "nonexistent",
+                        "new_name": "Whatever",
+                        "save_as": "rename_not_found.svg",
+                    },
+                )
+
+    @pytest.mark.asyncio
+    async def test_rename_layer_rejects_non_layer_group(
+        self, dom_test_config, shape_svg
+    ):
+        """A <g> WITHOUT inkscape:groupmode="layer" must be rejected."""
+        # shape_svg has rect/circle/text — none are Inkscape layers
+        with pytest.raises(Exception):
+            async with Client(dom_server.app) as client:
+                await client.call_tool(
+                    "rename_layer",
+                    {
+                        "doc": {"type": "inline", "svg": shape_svg},
+                        "layer_id": "rect1",
+                        "new_name": "Not A Layer",
+                        "save_as": "rename_non_layer.svg",
+                    },
+                )
+
+    @pytest.mark.asyncio
+    async def test_rename_layer_rejects_unsafe_name(
+        self, dom_test_config, layered_svg
+    ):
+        """new_name containing '<', '>', or '"' must be rejected."""
+        with pytest.raises(Exception):
+            async with Client(dom_server.app) as client:
+                await client.call_tool(
+                    "rename_layer",
+                    {
+                        "doc": {"type": "inline", "svg": layered_svg},
+                        "layer_id": "layer1",
+                        "new_name": '<script>alert("xss")</script>',
+                        "save_as": "rename_unsafe_name.svg",
+                    },
+                )
+
+    @pytest.mark.asyncio
+    async def test_rename_layer_rejects_unsafe_id(
+        self, dom_test_config, layered_svg
+    ):
+        """layer_id not matching _validate_id pattern must raise ValidationError."""
+        with pytest.raises(Exception):
+            async with Client(dom_server.app) as client:
+                await client.call_tool(
+                    "rename_layer",
+                    {
+                        "doc": {"type": "inline", "svg": layered_svg},
+                        "layer_id": "1invalid-start",
+                        "new_name": "Anything",
+                        "save_as": "rename_unsafe_id.svg",
+                    },
+                )
