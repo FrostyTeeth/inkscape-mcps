@@ -1,6 +1,7 @@
 """DOM-based Inkscape MCP server for SVG editing and cleaning."""
 
 import io
+import math
 import os
 import re
 import uuid
@@ -101,6 +102,93 @@ UNSAFE_PATTERNS = [
     re.compile(r"\\\\"),  # Backslash escapes
     re.compile(r"[{}]"),  # Brace injection
 ]
+
+
+# ---------------------------------------------------------------------------
+# Inkscape namespace
+# ---------------------------------------------------------------------------
+INKSCAPE_NS = "http://www.inkscape.org/namespaces/inkscape"
+
+# Allowlists for shape tags, shape attributes, and style properties
+_ALLOWED_SHAPE_TAGS: frozenset[str] = frozenset(
+    {"rect", "circle", "ellipse", "line", "polygon"}
+)
+_ALLOWED_SHAPE_ATTRS: frozenset[str] = frozenset(
+    {
+        "x", "y", "width", "height", "rx", "ry",
+        "cx", "cy", "r",
+        "x1", "y1", "x2", "y2",
+        "points", "transform", "id", "class",
+    }
+)
+_ALLOWED_STYLE_PROPS: frozenset[str] = frozenset(
+    {
+        "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin",
+        "opacity", "fill-opacity", "stroke-opacity", "display", "visibility",
+    }
+)
+
+# Valid XML ID regex: must start with letter or underscore, up to 64 chars total
+_ID_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]{0,63}$")
+
+
+def _validate_id(value: str) -> None:
+    """Raise ValueError if *value* is not a safe XML/SVG id attribute value."""
+    if not _ID_RE.match(value):
+        raise ValueError(f"Invalid id value: {value!r}")
+
+
+def _validate_numeric(
+    value: float, *, min_val: float, max_val: float, name: str
+) -> None:
+    """Raise ValueError if *value* is non-finite or outside [min_val, max_val]."""
+    if not math.isfinite(value):
+        raise ValueError(f"{name} must be a finite number, got {value!r}")
+    if not (min_val <= value <= max_val):
+        raise ValueError(
+            f"{name} must be between {min_val} and {max_val}, got {value!r}"
+        )
+
+
+def _css_to_xpath(selector: str) -> str:
+    """Convert a simple CSS selector to an XPath expression.
+
+    Supports: element, #id, .class, element.class, *, comma lists,
+    and child combinators (> — returned as //NOMATCH since unsupported).
+    Complex or unsupported patterns also return //NOMATCH.
+    """
+    if selector == "*":
+        return "//*"
+    if selector.startswith("#"):
+        return f"//*[@id='{selector[1:]}']"
+    if selector.startswith(".") and "." not in selector[1:]:
+        class_name = selector[1:]
+        return f"//*[contains(concat(' ', @class, ' '), ' {class_name} ')]"
+    if ">" in selector:
+        return "//NOMATCH"
+    if "," in selector:
+        parts = [s.strip() for s in selector.split(",")]
+        xpath_parts = []
+        for part in parts:
+            if part.isalpha():
+                xpath_parts.append(f"//svg:{part}")
+            else:
+                xpath_parts.append("//NOMATCH")
+        return " | ".join(xpath_parts)
+    if "." in selector and not selector.startswith("."):
+        element, class_name = selector.split(".", 1)
+        return (
+            f"//svg:{element}[contains(concat(' ', @class, ' '), ' {class_name} ')]"
+        )
+    if selector.isalpha():
+        return f"//svg:{selector}"
+    return "//NOMATCH"
+
+
+def _select_nodes(root: inkex.SvgDocumentElement, selector_value: str) -> list:
+    """Return all nodes matching *selector_value* (a CSS selector) under *root*."""
+    xpath = _css_to_xpath(selector_value)
+    return root.xpath(xpath, namespaces={"svg": "http://www.w3.org/2000/svg"})
 
 
 def _init_config(config: InkscapeConfig | None = None) -> None:
@@ -251,80 +339,21 @@ async def _dom_set_impl(doc: Doc, ops: list[SetOp], save_as: str) -> dict:
     if SEM is None:
         raise ToolError("Server not initialized")
 
-    # Create args object for internal use
     args = SetArgs(doc=doc, ops=ops, save_as=save_as)
 
     async with SEM:
         try:
             txt = _load_svg_text(args.doc)
-            # Handle SVGs with XML declarations that require bytes input
             if txt.strip().startswith("<?xml") and "encoding=" in txt:
-                # Convert to bytes for lxml parsing
                 tree = inkex.load_svg(io.BytesIO(txt.encode("utf-8")))
             else:
                 tree = inkex.load_svg(io.StringIO(txt))
 
-            # Get the root element for CSS selection
             root = tree.getroot()
             changed = 0
 
             for op in args.ops:
-                # Convert CSS selector to XPath with SVG namespace support
-                selector = op.selector.value
-
-                # Handle complex selectors by converting to XPath
-                if selector == "circle":
-                    xpath = "//svg:circle"
-                elif selector == "rect":
-                    xpath = "//svg:rect"
-                elif selector == "text":
-                    xpath = "//svg:text"
-                elif selector == "*":
-                    xpath = "//*"
-                elif selector.startswith("#"):
-                    # ID selector: #myid -> //*[@id='myid']
-                    xpath = f"//*[@id='{selector[1:]}']"
-                elif selector.startswith(".") and "." not in selector[1:]:
-                    # Simple class selector: .myclass
-                    class_name = selector[1:]
-                    xpath = f"//*[contains(concat(' ', @class, ' '), ' {class_name} ')]"
-                elif "." in selector and not selector.startswith("."):
-                    # Element with class: rect.shape ->
-                    # //svg:rect[contains(concat(' ', @class, ' '), ' shape ')]
-                    parts = selector.split(".", 1)
-                    element, class_name = parts[0], parts[1]
-                    xpath = (
-                        f"//svg:{element}[contains(concat(' ', @class, ' '), "
-                        f"' {class_name} ')]"
-                    )
-                elif "," in selector:
-                    # Multiple selectors: text, rect -> //svg:text | //svg:rect
-                    selectors = [s.strip() for s in selector.split(",")]
-                    xpath_parts = []
-                    for sel in selectors:
-                        if sel in ("circle", "rect", "text"):
-                            xpath_parts.append(f"//svg:{sel}")
-                        else:
-                            # Fallback for complex parts - just return no matches
-                            xpath_parts.append("//NOMATCH")
-                    xpath = " | ".join(xpath_parts)
-                elif ">" in selector:
-                    # Child selectors are complex - just return no matches
-                    # for unsupported patterns
-                    # This prevents the XPath error while keeping security
-                    # validation working
-                    xpath = "//NOMATCH"
-                else:
-                    # Simple element selector
-                    if selector.isalpha():
-                        xpath = f"//svg:{selector}"
-                    else:
-                        # Complex unsupported selector - return no matches
-                        xpath = "//NOMATCH"
-
-                nodes = root.xpath(
-                    xpath, namespaces={"svg": "http://www.w3.org/2000/svg"}
-                )
+                nodes = _select_nodes(root, op.selector.value)
                 for n in nodes:
                     for k, v in op.set.items():
                         if k.startswith("style."):
@@ -341,7 +370,6 @@ async def _dom_set_impl(doc: Doc, ops: list[SetOp], save_as: str) -> dict:
             _sanitize_tree(root)
 
             out_path = _ensure_in_workspace(Path(args.save_as))
-            # Use BytesIO for tree writing, then decode to string
             out_buf = io.BytesIO()
             tree.write(out_buf, encoding="utf-8", xml_declaration=True)
             _atomic_write(out_path, out_buf.getvalue().decode("utf-8"))
