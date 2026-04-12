@@ -131,6 +131,18 @@ async def rename_layer(
     return await dom_server._rename_layer_impl(doc, layer_id, new_name, save_as)
 
 
+@tool("set_layer_visibility")
+@flatten_pydantic_params
+async def set_layer_visibility(
+    ctx: Context, doc: dom_server.Doc, layer_id: str, visible: bool, save_as: str
+) -> dict:
+    """Set the visibility of an Inkscape layer by toggling display:none on its style."""
+    if CFG is None:
+        raise ToolError("Config not initialized")
+    dom_server._init_config(CFG)
+    return await dom_server._set_layer_visibility_impl(doc, layer_id, visible, save_as)
+
+
 def main(config: InkscapeConfig | None = None) -> None:
     """Main entry point for combined server."""
     _init_config(config)

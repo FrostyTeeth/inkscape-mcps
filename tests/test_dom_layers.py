@@ -369,3 +369,136 @@ class TestRenameLayer:
                         "save_as": "rename_unsafe_id.svg",
                     },
                 )
+
+
+class TestSetLayerVisibility:
+    """Tests for the set_layer_visibility tool on dom_server.app."""
+
+    @pytest.mark.asyncio
+    async def test_set_layer_visibility_hide(self, dom_test_config, layered_svg):
+        """visible=False must set display:none in the layer's style attribute."""
+        async with Client(dom_server.app) as client:
+            result = await client.call_tool(
+                "set_layer_visibility",
+                {
+                    "doc": {"type": "inline", "svg": layered_svg},
+                    "layer_id": "layer1",
+                    "visible": False,
+                    "save_as": "visibility_hide.svg",
+                },
+            )
+
+        assert result.data.get("ok") is True
+        assert result.data.get("changed") == 1
+
+        out_path = dom_test_config.workspace / "visibility_hide.svg"
+        assert out_path.exists()
+        content = out_path.read_text()
+        # The layer element must have display:none somewhere in its style
+        assert "display:none" in content
+
+    @pytest.mark.asyncio
+    async def test_set_layer_visibility_show_clears_display_none(
+        self, dom_test_config
+    ):
+        """visible=True must remove display:none from the layer's style attribute."""
+        hidden_svg = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<svg xmlns="http://www.w3.org/2000/svg"'
+            ' xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"'
+            ' width="200" height="200">\n'
+            '  <g inkscape:label="Layer 1" inkscape:groupmode="layer" id="layer1"'
+            ' style="display:none">\n'
+            '    <rect x="10" y="10" width="80" height="80" fill="blue"/>\n'
+            "  </g>\n"
+            "</svg>"
+        )
+
+        async with Client(dom_server.app) as client:
+            result = await client.call_tool(
+                "set_layer_visibility",
+                {
+                    "doc": {"type": "inline", "svg": hidden_svg},
+                    "layer_id": "layer1",
+                    "visible": True,
+                    "save_as": "visibility_show.svg",
+                },
+            )
+
+        assert result.data.get("ok") is True
+
+        out_path = dom_test_config.workspace / "visibility_show.svg"
+        content = out_path.read_text()
+        # display:none must no longer be present on layer1
+        assert "display:none" not in content
+
+    @pytest.mark.asyncio
+    async def test_set_layer_visibility_preserves_other_style_props(
+        self, dom_test_config
+    ):
+        """Showing a layer must preserve other style properties like opacity."""
+        styled_svg = (
+            '<?xml version="1.0" encoding="UTF-8"?>\n'
+            '<svg xmlns="http://www.w3.org/2000/svg"'
+            ' xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"'
+            ' width="200" height="200">\n'
+            '  <g inkscape:label="Layer 1" inkscape:groupmode="layer" id="layer1"'
+            ' style="display:none;opacity:0.5">\n'
+            '    <rect x="10" y="10" width="80" height="80" fill="blue"/>\n'
+            "  </g>\n"
+            "</svg>"
+        )
+
+        async with Client(dom_server.app) as client:
+            result = await client.call_tool(
+                "set_layer_visibility",
+                {
+                    "doc": {"type": "inline", "svg": styled_svg},
+                    "layer_id": "layer1",
+                    "visible": True,
+                    "save_as": "visibility_preserve_style.svg",
+                },
+            )
+
+        assert result.data.get("ok") is True
+
+        out_path = dom_test_config.workspace / "visibility_preserve_style.svg"
+        content = out_path.read_text()
+        # display:none must be gone
+        assert "display:none" not in content
+        # opacity must still be present
+        assert "opacity:0.5" in content
+
+    @pytest.mark.asyncio
+    async def test_set_layer_visibility_not_found_raises(
+        self, dom_test_config, layered_svg
+    ):
+        """layer_id not present in the SVG must raise an error."""
+        with pytest.raises(Exception):
+            async with Client(dom_server.app) as client:
+                await client.call_tool(
+                    "set_layer_visibility",
+                    {
+                        "doc": {"type": "inline", "svg": layered_svg},
+                        "layer_id": "nonexistent",
+                        "visible": False,
+                        "save_as": "visibility_not_found.svg",
+                    },
+                )
+
+    @pytest.mark.asyncio
+    async def test_set_layer_visibility_rejects_non_layer_group(
+        self, dom_test_config, shape_svg
+    ):
+        """A <g> WITHOUT inkscape:groupmode="layer" must be rejected."""
+        with pytest.raises(Exception):
+            async with Client(dom_server.app) as client:
+                await client.call_tool(
+                    "set_layer_visibility",
+                    {
+                        "doc": {"type": "inline", "svg": shape_svg},
+                        "layer_id": "rect1",
+                        "visible": False,
+                        "save_as": "visibility_non_layer.svg",
+                    },
+                )

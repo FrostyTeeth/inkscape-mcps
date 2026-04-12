@@ -740,6 +740,73 @@ async def rename_layer(
     return await _rename_layer_impl(doc, layer_id, new_name, save_as)
 
 
+# ---------------------------------------------------------------------------
+# set_layer_visibility helpers and implementation
+# ---------------------------------------------------------------------------
+
+class LayerVisibilityArgs(BaseModel):
+    """Arguments for set_layer_visibility."""
+
+    layer_id: str
+    visible: bool
+
+
+async def _set_layer_visibility_impl(
+    doc: Doc, layer_id: str, visible: bool, save_as: str
+) -> dict:
+    """Internal implementation for set_layer_visibility."""
+    if SEM is None:
+        raise ToolError("Server not initialized")
+
+    async with SEM:
+        try:
+            txt = _load_svg_text(doc)
+            if txt.strip().startswith("<?xml") and "encoding=" in txt:
+                tree = inkex.load_svg(io.BytesIO(txt.encode("utf-8")))
+            else:
+                tree = inkex.load_svg(io.StringIO(txt))
+
+            root = tree.getroot()
+            el = _find_layer_by_id(root, layer_id)
+
+            # Parse existing style using inkex.Style
+            existing_style_str = el.get("style", "")
+            style = inkex.Style(existing_style_str)
+
+            if visible:
+                # Remove display:none if present
+                style.pop("display", None)
+            else:
+                # Set display:none
+                style["display"] = "none"
+
+            # Write back — only set if style is non-empty, else remove attr
+            if style:
+                el.set("style", str(style))
+            elif "style" in el.attrib:
+                del el.attrib["style"]
+
+            out_path = _ensure_in_workspace(Path(save_as))
+            out_buf = io.BytesIO()
+            tree.write(out_buf, encoding="utf-8", xml_declaration=True)
+            _atomic_write(out_path, out_buf.getvalue().decode("utf-8"))
+
+            return {"ok": True, "changed": 1, "out": str(out_path), "id": layer_id}
+
+        except (ValidationError, ToolError):
+            raise
+        except Exception as e:
+            raise ToolError(f"set_layer_visibility failed: {e}") from e
+
+
+@tool("set_layer_visibility")
+async def set_layer_visibility(
+    ctx: Context, doc: Doc, layer_id: str, visible: bool, save_as: str
+) -> dict:
+    """Set the visibility of an Inkscape layer by toggling display:none on its style."""
+    return await _set_layer_visibility_impl(doc, layer_id, visible, save_as)
+
+
 def main(config: InkscapeConfig | None = None) -> None:
     """Main entry point for DOM server."""
     _init_config(config)
