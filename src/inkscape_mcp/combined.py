@@ -155,6 +155,30 @@ async def create_gradient(
     return await dom_server._create_gradient_impl(doc, gradient, save_as)
 
 
+@tool("duplicate_object")
+@flatten_pydantic_params
+async def duplicate_object(
+    ctx: Context,
+    doc: dom_server.Doc,
+    source: dom_server.Selector,
+    save_as: str,
+    new_id: str | None = None,
+    offset_dx: float = 0.0,
+    offset_dy: float = 0.0,
+) -> dict:
+    """Duplicate an SVG element by CSS selector, inserting the copy after the original."""
+    if CFG is None:
+        raise ToolError("Config not initialized")
+    dom_server._init_config(CFG)
+    args = dom_server.DuplicateArgs(
+        source=source,
+        new_id=new_id,
+        offset_dx=offset_dx,
+        offset_dy=offset_dy,
+    )
+    return await dom_server._duplicate_object_impl(doc, args, save_as)
+
+
 def main(config: InkscapeConfig | None = None) -> None:
     """Main entry point for combined server."""
     _init_config(config)

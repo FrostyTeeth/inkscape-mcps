@@ -1,5 +1,6 @@
 """DOM-based Inkscape MCP server for SVG editing and cleaning."""
 
+import copy
 import io
 import math
 import os
@@ -963,6 +964,111 @@ async def create_gradient(
 ) -> dict:
     """Add a new linear or radial gradient to the SVG <defs> element."""
     return await _create_gradient_impl(doc, gradient, save_as)
+
+
+# ---------------------------------------------------------------------------
+# duplicate_object helpers, model, and implementation
+# ---------------------------------------------------------------------------
+
+def _append_transform(el, extra: str) -> None:
+    """Append a transform to an element, preserving any existing transform."""
+    existing = el.get("transform", "")
+    if existing:
+        el.set("transform", f"{existing} {extra}")
+    else:
+        el.set("transform", extra)
+
+
+class DuplicateArgs(BaseModel):
+    """Arguments for duplicate_object."""
+
+    source: Selector
+    new_id: str | None = None
+    offset_dx: float = 0.0
+    offset_dy: float = 0.0
+
+
+async def _duplicate_object_impl(
+    doc: Doc, args: DuplicateArgs, save_as: str
+) -> dict:
+    """Internal implementation for duplicate_object."""
+    if SEM is None:
+        raise ToolError("Server not initialized")
+
+    # Validate new_id before acquiring the semaphore
+    if args.new_id is not None:
+        try:
+            _validate_id(args.new_id)
+        except ValueError as e:
+            raise ToolError(str(e)) from e
+
+    async with SEM:
+        try:
+            txt = _load_svg_text(doc)
+            if txt.strip().startswith("<?xml") and "encoding=" in txt:
+                tree = inkex.load_svg(io.BytesIO(txt.encode("utf-8")))
+            else:
+                tree = inkex.load_svg(io.StringIO(txt))
+
+            root = tree.getroot()
+            matches = _select_nodes(root, args.source.value)
+
+            if not matches:
+                return {"ok": True, "changed": 0, "out": None, "id": None}
+
+            original = matches[0]
+
+            # Deep copy the element (includes all children)
+            copy_el = copy.deepcopy(original)
+
+            # Assign id
+            new_id = args.new_id if args.new_id else f"copy-{uuid.uuid4().hex[:8]}"
+            copy_el.set("id", new_id)
+
+            # Apply offset transform if non-zero
+            if args.offset_dx != 0.0 or args.offset_dy != 0.0:
+                _append_transform(
+                    copy_el,
+                    f"translate({args.offset_dx},{args.offset_dy})",
+                )
+
+            # Insert copy immediately after original in the tree
+            original.addnext(copy_el)
+
+            # Sanitize before writing (strips <script>, on* handlers, etc.)
+            _sanitize_tree(root)
+
+            out_path = _ensure_in_workspace(Path(save_as))
+            out_buf = io.BytesIO()
+            tree.write(out_buf, encoding="utf-8", xml_declaration=True)
+            _atomic_write(out_path, out_buf.getvalue().decode("utf-8"))
+
+            return {"ok": True, "changed": 1, "out": str(out_path), "id": new_id}
+
+        except (ValidationError, ToolError):
+            raise
+        except Exception as e:
+            raise ToolError(f"duplicate_object failed: {e}") from e
+
+
+@tool("duplicate_object")
+async def duplicate_object(
+    ctx: Context,
+    doc: Doc,
+    source: Selector,
+    save_as: str,
+    new_id: str | None = None,
+    offset_dx: float = 0.0,
+    offset_dy: float = 0.0,
+) -> dict:
+    """Duplicate an SVG element by CSS selector, inserting the copy after the original."""
+    args = DuplicateArgs(
+        source=source,
+        new_id=new_id,
+        offset_dx=offset_dx,
+        offset_dy=offset_dy,
+    )
+    return await _duplicate_object_impl(doc, args, save_as)
 
 
 def main(config: InkscapeConfig | None = None) -> None:
