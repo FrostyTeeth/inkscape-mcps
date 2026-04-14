@@ -78,7 +78,24 @@ async def dom_validate(ctx: Context, doc: dom_server.Doc) -> dict:
 async def dom_set(
     ctx: Context, doc: dom_server.Doc, ops: list[dom_server.SetOp], save_as: str
 ) -> dict:
-    """Set attributes/styles on DOM elements."""
+    """Set attributes/styles on DOM elements.
+
+    IMPORTANT: ``ops`` MUST be a non-empty JSON array. Passing an empty array
+    will succeed syntactically but produce a "DOM mutation failed" error at
+    runtime because there is nothing to apply.
+
+    Each entry in ``ops`` must contain:
+      - ``selector``: a CSS selector object, e.g. ``{"type": "css", "value": "circle"}``
+      - ``set``: a mapping of attribute/style keys to new values, e.g. ``{"style.fill": "#ff0000"}``
+
+    Minimal valid call::
+
+        dom_set(
+            doc={"type": "file", "path": "input.svg"},
+            ops=[{"selector": {"type": "css", "value": "circle"}, "set": {"style.fill": "#ff0000"}}],
+            save_as="output.svg",
+        )
+    """
     if CFG is None:
         raise ToolError("Config not initialized")
     dom_server._init_config(CFG)

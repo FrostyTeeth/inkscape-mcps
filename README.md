@@ -64,6 +64,10 @@ export INKS_WORKSPACE="./my-workspace"  # Default: ./inkspace
 export INKS_MAX_FILE="104857600"        # Default: 50MB
 export INKS_TIMEOUT="120"               # Default: 60s
 export INKS_MAX_CONC="8"                # Default: 4
+export INKS_INKSCAPE_BIN="/Applications/Inkscape.app/Contents/MacOS/inkscape"
+                                        # Optional: absolute path to the inkscape binary.
+                                        # Required when inkscape is not on PATH (typical
+                                        # on macOS .app installs).
 ```
 
 ### MCP Client Integration
@@ -129,6 +133,30 @@ await action_run({
     "actions": ["select-all", "path-union"]
 })
 ```
+
+## Direct Inkscape CLI Export (SVG to PNG Reference)
+
+The MCP server invokes Inkscape under the hood. The following CLI flags work
+reliably and can be useful when scripting exports directly or when debugging
+MCP tool behaviour:
+
+| Flag | Purpose |
+|------|---------|
+| `--export-filename=<path>` | Output file path (determines format when `--export-type` is omitted) |
+| `--export-type=png` | Force PNG output regardless of file extension |
+| `--export-width=<px>` | Output width in pixels |
+| `--export-height=<px>` | Output height in pixels |
+
+**One-liner example:**
+
+```bash
+inkscape input.svg --export-filename=out.png --export-width=1024 --export-height=768
+```
+
+> **Known gap:** The `action_run` MCP tool exposes a `dpi` parameter for PNG
+> export but does **not** currently expose `width` or `height`. Use the CLI
+> directly (or set a high DPI value) when you need pixel-exact output
+> dimensions.
 
 ## Security Features
 
@@ -206,12 +234,15 @@ Add to your `claude_desktop_config.json`:
       "env": {
         "INKS_WORKSPACE": "/Users/yourname/inkscape-workspace",
         "INKS_MAX_FILE": "52428800",
-        "INKS_TIMEOUT": "120"
+        "INKS_TIMEOUT": "120",
+        "INKS_INKSCAPE_BIN": "/Applications/Inkscape.app/Contents/MacOS/inkscape"
       }
     }
   }
 }
 ```
+
+> **Note:** `INKS_INKSCAPE_BIN` is only needed when `inkscape` is not on your `PATH`. This is typical on macOS when Inkscape is installed as a `.app` bundle. Omit the key entirely on Linux or when `inkscape` resolves correctly from the shell.
 
 ### Testing with Claude Code
 
