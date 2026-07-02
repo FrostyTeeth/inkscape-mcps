@@ -24,6 +24,18 @@ pip install inkscape-mcp
 
 ### From Source
 
+Global install (recommended) — puts `inkscape-mcp`, `inkscape-mcp-cli`, and
+`inkscape-mcp-dom` on `$PATH`, independent of any project venv:
+
+```bash
+git clone https://github.com/yourusername/inkscape-mcp
+cd inkscape-mcp
+uv tool install .
+# or: pipx install .
+```
+
+Development setup (isolated to this repo's own `.venv`):
+
 ```bash
 git clone https://github.com/yourusername/inkscape-mcp
 cd inkscape-mcp
@@ -286,10 +298,16 @@ Three MCP servers are available:
 
 **Server not found:**
 ```bash
-# Check if entry points are installed
+# Check if entry points are installed globally
 which inkscape-mcp
+
+# Or, for a dev install inside this repo's venv
 uv run which inkscape-mcp
 ```
+
+If `inkscape-mcp` isn't on `$PATH` at all, install it globally with
+`uv tool install .` (or `pipx install .`) rather than pointing your MCP client at a
+project-specific venv path.
 
 **Permission errors:**
 ```bash
