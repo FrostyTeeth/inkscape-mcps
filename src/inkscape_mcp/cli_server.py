@@ -2,6 +2,7 @@
 
 import os
 import platform
+import re
 import shutil
 import signal
 import subprocess
@@ -82,6 +83,7 @@ SAFE_ACTIONS = {
     "path-division",
     "path-exclusion",
     "path-simplify",
+    "path-effects-apply",
     "object-to-path",
     "object-stroke-to-path",
     "selection-group",
@@ -105,7 +107,14 @@ SAFE_ACTIONS = {
 
 
 def _is_safe_action(a: str) -> bool:
-    """Check if action is in the safe allowlist."""
+    """Check if action is in the safe allowlist.
+
+    Actions are joined with ';' before being passed to Inkscape's
+    --actions flag, so a single list element containing ';' could smuggle
+    additional, unvalidated actions past a prefix-only check.
+    """
+    if ";" in a:
+        return False
     aid = a.split(":", 1)[0]
     return aid in SAFE_ACTIONS
 
@@ -157,6 +166,14 @@ class Export(BaseModel):
     out: str
     dpi: int | None = None
     area: Literal["page", "drawing"] = "page"
+    plain: bool = False
+
+    @field_validator("plain")
+    @classmethod
+    def plain_only_for_svg(cls, v: bool, info: Any) -> bool:
+        if v and info.data.get("type") != "svg":
+            raise ValueError("plain=True is only valid for SVG exports")
+        return v
 
 
 class RunArgs(BaseModel):
@@ -207,6 +224,8 @@ def _mk_cmd(infile: Path, args: RunArgs, tmp_export: Path | None) -> list[str]:
         acts += [f"export-type:{args.export.type}", f"export-filename:{tmp_export}"]
         if args.export.dpi:
             acts.append(f"export-dpi:{args.export.dpi}")
+        if args.export.plain:
+            acts.append("export-plain-svg")
         acts.append("export-do")
 
     # Let Inkscape close naturally - file-close causes crashes in batch mode
@@ -313,6 +332,20 @@ def _run_inkscape(
         return _execute_subprocess(cmd, timeout, popen_kw)
 
 
+_ABS_PATH_RE = re.compile(r"(?:/[^\s\"':;]+){2,}")
+
+
+def _scrub_paths(text: str) -> str:
+    """Redact absolute filesystem paths from diagnostic text.
+
+    Inkscape/GLib stderr routinely embeds absolute paths (workspace temp
+    files, $HOME, font/theme paths) that would otherwise leak host
+    filesystem layout to MCP clients when surfaced in error/warning
+    messages.
+    """
+    return _ABS_PATH_RE.sub("<path>", text)
+
+
 def _execute_subprocess(
     cmd: list[str], timeout: int, popen_kw: dict
 ) -> tuple[bytes, bytes]:
@@ -327,7 +360,8 @@ def _execute_subprocess(
         raise ToolError("Operation timed out") from None
 
     if proc.returncode != 0:
-        raise ToolError("inkscape failed")
+        msg = _scrub_paths(stderr.decode("utf-8", errors="replace").strip())[-500:]
+        raise ToolError(f"inkscape failed: {msg}" if msg else "inkscape failed")
 
     return stdout, stderr
 
@@ -393,13 +427,23 @@ async def _action_run_impl(
 
         try:
             # 4. Execute Inkscape
-            _run_inkscape(cmd, timeout, lock_path)
+            _, stderr_bytes = _run_inkscape(cmd, timeout, lock_path)
 
             # 5. Finalize export
             _finalize_export(tmp_export, final_export)
 
             # 6. Return result
-            return {"ok": True, "out": str(final_export) if final_export else None}
+            result: dict = {
+                "ok": True,
+                "out": str(final_export) if final_export else None,
+            }
+            if stderr_bytes:
+                warnings = _scrub_paths(
+                    stderr_bytes.decode("utf-8", errors="replace").strip()
+                )[-1000:]
+                if warnings:
+                    result["warnings"] = warnings
+            return result
 
         finally:
             # 7. Cleanup
@@ -415,6 +459,44 @@ async def action_run(
     timeout_s: int | None = None,
 ) -> dict:
     """Run Inkscape actions on a document."""
+    return await _action_run_impl(doc, actions, export, timeout_s)
+
+
+_SELECTOR_SAFE = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+
+def _validate_selector(selector: str) -> str:
+    """Reject selectors containing shell-injectable characters."""
+    if not _SELECTOR_SAFE.match(selector):
+        raise ValidationError(
+            "selector must contain only alphanumeric characters, hyphens, and underscores"
+        )
+    return selector
+
+
+@tool("bake_lpe")
+async def bake_lpe(
+    ctx: Context,
+    doc: Doc,
+    out: str,
+    selector: str | None = None,
+    timeout_s: int | None = None,
+) -> dict:
+    """Bake Live Path Effects into path data and export as plain SVG.
+
+    Runs select-all (or select-by-id:<selector> when provided) then
+    path-effects-apply, exporting the result as a plain SVG file with
+    Inkscape-private namespace attributes stripped.
+
+    Returns {"ok": True, "out": "<absolute path to baked SVG>"}.
+    """
+    if selector is not None:
+        _validate_selector(selector)
+        actions: list[str] = [f"select-by-id:{selector}", "path-effects-apply"]
+    else:
+        actions = ["select-all", "path-effects-apply"]
+
+    export = Export(type="svg", out=out, plain=True, area="page")
     return await _action_run_impl(doc, actions, export, timeout_s)
 
 
