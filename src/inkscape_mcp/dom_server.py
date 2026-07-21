@@ -33,9 +33,15 @@ SEM: anyio.Semaphore | None = None
 SAFE_SEL = re.compile(r"^[a-zA-Z0-9#.\-\s,>*]+$")
 
 # Dangerous SVG element names (local, without namespace prefix)
-_DANGEROUS_SVG_ELEMENTS = frozenset({
-    "script", "foreignObject", "object", "embed", "iframe",
-})
+_DANGEROUS_SVG_ELEMENTS = frozenset(
+    {
+        "script",
+        "foreignObject",
+        "object",
+        "embed",
+        "iframe",
+    }
+)
 
 # Dangerous URI protocols to block in link-like attributes
 _DANGEROUS_PROTOCOLS = ("javascript:", "vbscript:", "data:")
@@ -67,7 +73,8 @@ def _sanitize_tree(root: inkex.SvgDocumentElement) -> None:
     """
     # --- Remove dangerous elements (collect first to avoid mutation-during-iteration) ---
     to_remove = [
-        el for el in root.iter()
+        el
+        for el in root.iter()
         if (lambda tag: tag.split("}")[-1] if "}" in tag else tag)(el.tag)
         in _DANGEROUS_SVG_ELEMENTS
     ]
@@ -120,16 +127,37 @@ _ALLOWED_SHAPE_TAGS: frozenset[str] = frozenset(
 )
 _ALLOWED_SHAPE_ATTRS: frozenset[str] = frozenset(
     {
-        "x", "y", "width", "height", "rx", "ry",
-        "cx", "cy", "r",
-        "x1", "y1", "x2", "y2",
-        "points", "transform", "id", "class",
+        "x",
+        "y",
+        "width",
+        "height",
+        "rx",
+        "ry",
+        "cx",
+        "cy",
+        "r",
+        "x1",
+        "y1",
+        "x2",
+        "y2",
+        "points",
+        "transform",
+        "id",
+        "class",
     }
 )
 _ALLOWED_STYLE_PROPS: frozenset[str] = frozenset(
     {
-        "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin",
-        "opacity", "fill-opacity", "stroke-opacity", "display", "visibility",
+        "fill",
+        "stroke",
+        "stroke-width",
+        "stroke-linecap",
+        "stroke-linejoin",
+        "opacity",
+        "fill-opacity",
+        "stroke-opacity",
+        "display",
+        "visibility",
     }
 )
 
@@ -173,18 +201,13 @@ def _css_to_xpath(selector: str) -> str:
         return "//NOMATCH"
     if "," in selector:
         parts = [s.strip() for s in selector.split(",")]
-        xpath_parts = []
-        for part in parts:
-            if part.isalpha():
-                xpath_parts.append(f"//svg:{part}")
-            else:
-                xpath_parts.append("//NOMATCH")
+        # Recurse so each comma part supports the full grammar (#id, .class,
+        # element.class, *), not just bare tag names.
+        xpath_parts = [_css_to_xpath(part) for part in parts]
         return " | ".join(xpath_parts)
     if "." in selector and not selector.startswith("."):
         element, class_name = selector.split(".", 1)
-        return (
-            f"//svg:{element}[contains(concat(' ', @class, ' '), ' {class_name} ')]"
-        )
+        return f"//svg:{element}[contains(concat(' ', @class, ' '), ' {class_name} ')]"
     if selector.isalpha():
         return f"//svg:{selector}"
     return "//NOMATCH"
@@ -311,11 +334,12 @@ def _atomic_write(path: Path, text: str) -> None:
 # Layer helpers
 # ---------------------------------------------------------------------------
 
+
 def _name_is_safe(name: str) -> None:
     """Reject layer names with unsafe characters that could cause attribute injection."""
     if not name or len(name) > 80:
         raise ValidationError("Layer name must be 1-80 characters")
-    if any(c in name for c in '<>"\'&\x00'):
+    if any(c in name for c in "<>\"'&\x00"):
         raise ValidationError("Layer name contains unsafe characters")
 
 
@@ -336,6 +360,7 @@ def _ensure_inkscape_namespace(root: inkex.SvgDocumentElement) -> None:
 # ShapeSpec model
 # ---------------------------------------------------------------------------
 
+
 class ShapeSpec(BaseModel):
     """Specification for a shape element to create."""
 
@@ -349,6 +374,7 @@ class ShapeSpec(BaseModel):
 # ---------------------------------------------------------------------------
 # Shape validation helper
 # ---------------------------------------------------------------------------
+
 
 def _validate_shape_spec(kind: str, attrs: dict, style: dict) -> None:
     """Validate shape kind, attrs, and style against allowlists.
@@ -553,9 +579,7 @@ async def _create_shape_impl(doc: Doc, shape: ShapeSpec, save_as: str) -> dict:
 
             # Set style
             if shape.style:
-                style_str = ";".join(
-                    f"{k}:{v}" for k, v in shape.style.items()
-                )
+                style_str = ";".join(f"{k}:{v}" for k, v in shape.style.items())
                 el.set("style", style_str)
 
             # Set id
@@ -589,6 +613,7 @@ async def create_shape(ctx: Context, doc: Doc, shape: ShapeSpec, save_as: str) -
 # ---------------------------------------------------------------------------
 # LayerSpec model
 # ---------------------------------------------------------------------------
+
 
 class LayerSpec(BaseModel):
     """Specification for an Inkscape layer (<g inkscape:groupmode="layer">)."""
@@ -648,7 +673,9 @@ async def _create_layer_impl(doc: Doc, layer: LayerSpec, save_as: str) -> dict:
                 parent = root
 
             # Build the layer <g> element
-            layer_id = layer.id if layer.id is not None else f"layer-{uuid.uuid4().hex[:8]}"
+            layer_id = (
+                layer.id if layer.id is not None else f"layer-{uuid.uuid4().hex[:8]}"
+            )
             g = root.makeelement(
                 f"{{{_SVG_NS}}}g",
                 nsmap={"inkscape": INKSCAPE_NS},
@@ -682,6 +709,7 @@ async def create_layer(ctx: Context, doc: Doc, layer: LayerSpec, save_as: str) -
 # ---------------------------------------------------------------------------
 # rename_layer helpers and implementation
 # ---------------------------------------------------------------------------
+
 
 def _find_layer_by_id(root: inkex.SvgDocumentElement, layer_id: str):
     """Find a <g> element that is an Inkscape layer with the given id.
@@ -762,6 +790,7 @@ async def rename_layer(
 # set_layer_visibility helpers and implementation
 # ---------------------------------------------------------------------------
 
+
 class LayerVisibilityArgs(BaseModel):
     """Arguments for set_layer_visibility."""
 
@@ -835,9 +864,7 @@ _COLOR_HEX_RE = re.compile(r"^#[0-9a-fA-F]{3}([0-9a-fA-F]{3})?$")
 def _validate_color_hex(value: str) -> str:
     """Raise ValidationError if *value* is not a 3- or 6-digit hex color."""
     if not _COLOR_HEX_RE.match(value):
-        raise ValidationError(
-            f"Color must be #rgb or #rrggbb hex, got: {value!r}"
-        )
+        raise ValidationError(f"Color must be #rgb or #rrggbb hex, got: {value!r}")
     return value
 
 
@@ -855,12 +882,13 @@ def _ensure_defs(root: inkex.SvgDocumentElement) -> inkex.BaseElement:
 # GradientStop / GradientSpec models
 # ---------------------------------------------------------------------------
 
+
 class GradientStop(BaseModel):
     """A single color stop in a gradient."""
 
-    offset: float           # 0.0..1.0
-    color: str              # "#rrggbb" or "#rgb" only
-    opacity: float = 1.0    # 0.0..1.0
+    offset: float  # 0.0..1.0
+    color: str  # "#rrggbb" or "#rgb" only
+    opacity: float = 1.0  # 0.0..1.0
 
 
 class GradientSpec(BaseModel):
@@ -868,7 +896,7 @@ class GradientSpec(BaseModel):
 
     kind: Literal["linear", "radial"]
     id: str | None = None
-    stops: list[GradientStop]   # 2..16
+    stops: list[GradientStop]  # 2..16
     # linear coords (all optional — default SVG behavior if None)
     x1: float | None = None
     y1: float | None = None
@@ -880,9 +908,7 @@ class GradientSpec(BaseModel):
     r: float | None = None
 
 
-async def _create_gradient_impl(
-    doc: Doc, gradient: GradientSpec, save_as: str
-) -> dict:
+async def _create_gradient_impl(doc: Doc, gradient: GradientSpec, save_as: str) -> dict:
     """Internal implementation for create_gradient."""
     if SEM is None:
         raise ToolError("Server not initialized")
@@ -897,13 +923,9 @@ async def _create_gradient_impl(
     for stop in gradient.stops:
         _validate_color_hex(stop.color)
         if not (0.0 <= stop.offset <= 1.0):
-            raise ValidationError(
-                f"stop offset must be 0.0..1.0, got {stop.offset}"
-            )
+            raise ValidationError(f"stop offset must be 0.0..1.0, got {stop.offset}")
         if not (0.0 <= stop.opacity <= 1.0):
-            raise ValidationError(
-                f"stop opacity must be 0.0..1.0, got {stop.opacity}"
-            )
+            raise ValidationError(f"stop opacity must be 0.0..1.0, got {stop.opacity}")
 
     # Validate id if provided
     if gradient.id is not None:
@@ -930,7 +952,8 @@ async def _create_gradient_impl(
                 grad_tag = f"{{{_SVG_NS}}}radialGradient"
 
             grad_id = (
-                gradient.id if gradient.id is not None
+                gradient.id
+                if gradient.id is not None
                 else f"gradient-{uuid.uuid4().hex[:8]}"
             )
             grad_el = root.makeelement(grad_tag, {"id": grad_id})
@@ -987,6 +1010,7 @@ async def create_gradient(
 # duplicate_object helpers, model, and implementation
 # ---------------------------------------------------------------------------
 
+
 def _append_transform(el, extra: str) -> None:
     """Append a transform to an element, preserving any existing transform."""
     existing = el.get("transform", "")
@@ -1005,9 +1029,7 @@ class DuplicateArgs(BaseModel):
     offset_dy: float = 0.0
 
 
-async def _duplicate_object_impl(
-    doc: Doc, args: DuplicateArgs, save_as: str
-) -> dict:
+async def _duplicate_object_impl(doc: Doc, args: DuplicateArgs, save_as: str) -> dict:
     """Internal implementation for duplicate_object."""
     if SEM is None:
         raise ToolError("Server not initialized")
@@ -1092,6 +1114,7 @@ async def duplicate_object(
 # query_dimensions — read-only bbox computation from SVG attributes
 # ---------------------------------------------------------------------------
 
+
 def _bbox_of(el) -> dict | None:
     """Compute bounding box of a single SVG element from its attributes.
 
@@ -1114,27 +1137,47 @@ def _bbox_of(el) -> dict | None:
     if tag == "rect":
         x, y = f("x", 0.0), f("y", 0.0)
         w, h = f("width", 0.0), f("height", 0.0)
-        return {"x": x, "y": y, "width": w, "height": h,
-                "bbox": {"x1": x, "y1": y, "x2": x + w, "y2": y + h}}
+        return {
+            "x": x,
+            "y": y,
+            "width": w,
+            "height": h,
+            "bbox": {"x1": x, "y1": y, "x2": x + w, "y2": y + h},
+        }
 
     if tag == "circle":
         cx, cy, r = f("cx", 0.0), f("cy", 0.0), f("r", 0.0)
-        return {"x": cx - r, "y": cy - r, "width": 2 * r, "height": 2 * r,
-                "bbox": {"x1": cx - r, "y1": cy - r, "x2": cx + r, "y2": cy + r}}
+        return {
+            "x": cx - r,
+            "y": cy - r,
+            "width": 2 * r,
+            "height": 2 * r,
+            "bbox": {"x1": cx - r, "y1": cy - r, "x2": cx + r, "y2": cy + r},
+        }
 
     if tag == "ellipse":
         cx, cy = f("cx", 0.0), f("cy", 0.0)
         rx, ry = f("rx", 0.0), f("ry", 0.0)
-        return {"x": cx - rx, "y": cy - ry, "width": 2 * rx, "height": 2 * ry,
-                "bbox": {"x1": cx - rx, "y1": cy - ry, "x2": cx + rx, "y2": cy + ry}}
+        return {
+            "x": cx - rx,
+            "y": cy - ry,
+            "width": 2 * rx,
+            "height": 2 * ry,
+            "bbox": {"x1": cx - rx, "y1": cy - ry, "x2": cx + rx, "y2": cy + ry},
+        }
 
     if tag == "line":
         x1, y1 = f("x1", 0.0), f("y1", 0.0)
         x2, y2 = f("x2", 0.0), f("y2", 0.0)
         bx1, by1 = min(x1, x2), min(y1, y2)
         bx2, by2 = max(x1, x2), max(y1, y2)
-        return {"x": bx1, "y": by1, "width": bx2 - bx1, "height": by2 - by1,
-                "bbox": {"x1": bx1, "y1": by1, "x2": bx2, "y2": by2}}
+        return {
+            "x": bx1,
+            "y": by1,
+            "width": bx2 - bx1,
+            "height": by2 - by1,
+            "bbox": {"x1": bx1, "y1": by1, "x2": bx2, "y2": by2},
+        }
 
     return None  # unsupported tag
 
@@ -1172,8 +1215,15 @@ async def _query_dimensions_impl(doc: Doc, selector: Selector) -> dict:
             if bbox_data is not None:
                 entry = {"id": el_id, "tag": tag, **bbox_data}
             else:
-                entry = {"id": el_id, "tag": tag,
-                         "x": None, "y": None, "width": None, "height": None, "bbox": None}
+                entry = {
+                    "id": el_id,
+                    "tag": tag,
+                    "x": None,
+                    "y": None,
+                    "width": None,
+                    "height": None,
+                    "bbox": None,
+                }
             results.append(entry)
 
         return {"ok": True, "matches": results}
@@ -1189,6 +1239,7 @@ async def query_dimensions(ctx: Context, doc: Doc, selector: Selector) -> dict:
 # group_objects — wrap matched elements in a new <g>
 # ---------------------------------------------------------------------------
 
+
 def _document_order_dedupe(nodes: list, root) -> list:
     """Return nodes in document order, deduped."""
     node_set = set(id(n) for n in nodes)
@@ -1203,13 +1254,11 @@ def _document_order_dedupe(nodes: list, root) -> list:
 class GroupObjectsArgs(BaseModel):
     """Arguments for group_objects."""
 
-    selectors: list[Selector]   # 1..32 selectors; union of matches is grouped
+    selectors: list[Selector]  # 1..32 selectors; union of matches is grouped
     group_id: str | None = None
 
 
-async def _group_objects_impl(
-    doc: Doc, args: GroupObjectsArgs, save_as: str
-) -> dict:
+async def _group_objects_impl(doc: Doc, args: GroupObjectsArgs, save_as: str) -> dict:
     """Internal implementation for group_objects."""
     if SEM is None:
         raise ToolError("Server not initialized")
@@ -1262,7 +1311,8 @@ async def _group_objects_impl(
 
             # Create the new <g> element
             group_id = (
-                args.group_id if args.group_id is not None
+                args.group_id
+                if args.group_id is not None
                 else f"group-{uuid.uuid4().hex[:8]}"
             )
             g = root.makeelement(f"{{{_SVG_NS}}}g", {"id": group_id})

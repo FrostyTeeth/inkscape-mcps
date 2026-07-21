@@ -31,6 +31,18 @@ class TestCssToXpath:
     def test_unsupported_returns_nomatch(self):
         assert _css_to_xpath("circle > rect") == "//NOMATCH"
 
+    def test_comma_list_of_tags(self):
+        assert _css_to_xpath("rect, circle") == "//svg:rect | //svg:circle"
+
+    def test_comma_list_mixes_ids_and_classes(self):
+        # Each comma part gets the full grammar, not just bare tag names.
+        result = _css_to_xpath("rect, #my-id, .cls")
+        parts = result.split(" | ")
+        assert parts[0] == "//svg:rect"
+        assert parts[1] == "//*[@id='my-id']"
+        assert "contains" in parts[2] and "cls" in parts[2]
+        assert "//NOMATCH" not in result
+
 
 class TestValidateId:
     def test_accepts_safe(self):
