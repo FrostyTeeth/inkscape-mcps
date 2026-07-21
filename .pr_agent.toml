@@ -23,6 +23,19 @@ patch_extra_lines_after = 4
 
 reasoning_effort = "medium"
 
+# --- Skipping review ---
+# NOTE: PR-Agent's ignore_pr_labels / ignore_pr_title / ignore_pr_source_branches
+# are enforced ONLY in webhook/app server modes (github_app.py et al). The GitHub
+# Action runner never reads them — verified in
+# pr_agent/servers/github_action_runner.py, which has no ignore_pr_* handling.
+# Setting them here would be inert, so skip control lives in the workflow's `if:`
+# guard instead (see .github/workflows/pr_agent.yml). That also avoids spinning
+# up a runner just to no-op.
+#
+#   skip-review         label -> no review job runs at all
+#   incremental-review  label -> pushes run only `/review -i`
+#   draft PR                  -> no review job runs
+
 [pr_reviewer]
 # --- Security + correctness review ---
 require_security_review = true
@@ -32,10 +45,18 @@ require_ticket_analysis_review = true
 require_todo_scan = true
 require_can_be_split_review = true
 
-num_max_findings = 10
+num_max_findings = 15
 persistent_comment = true
 enable_review_labels_security = true
 enable_review_labels_effort = true
+
+# --- Incremental review (/review -i) ---
+# Gates below are thresholds that must be met before an incremental review runs.
+# 0 = review every push, matching CodeRabbit's `auto_pause_after_reviewed_commits: 0`.
+# Raise minimal_commits/minutes to throttle noisy rapid-fire pushes.
+require_all_thresholds_for_incremental_review = false
+minimal_commits_for_incremental_review = 0
+minimal_minutes_for_incremental_review = 0
 
 extra_instructions = """
 Prioritise, in order:
@@ -71,9 +92,9 @@ collapsible_file_list = "adaptive"
 [pr_code_suggestions]
 focus_only_on_problems = true
 persistent_comment = true
-num_code_suggestions_per_chunk = 4
+num_code_suggestions_per_chunk = 6
 max_number_of_calls = 3
-suggestions_score_threshold = 3
+suggestions_score_threshold = 2
 
 extra_instructions = """
 Target quality problems that linters and formatters structurally cannot detect.
@@ -123,6 +144,12 @@ auto_improve = true
 # Re-review on every new commit pushed to an open PR.
 # Mirrors CodeRabbit's `auto_pause_after_reviewed_commits: 0`.
 handle_push_trigger = true
-push_commands = ["/describe", "/review", "/improve"]
+# PR opened  -> full review (auto_review/auto_describe/auto_improve above).
+# New commit -> INCREMENTAL review, scoped to commits since the last review.
+# Swap "/review -i" for "/review" here to make pushes re-review the whole PR.
+# Either mode can be run on demand by commenting on the PR:
+#   /review     -> full review
+#   /review -i  -> incremental review
+push_commands = ["/describe", "/review -i", "/improve"]
 push_trigger_ignore_bot_commits = true
 push_trigger_ignore_merge_commits = true
