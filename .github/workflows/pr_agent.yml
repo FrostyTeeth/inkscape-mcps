@@ -78,12 +78,41 @@ jobs:
           echo "Review mode: $(grep '^mode=' "$GITHUB_OUTPUT" | cut -d= -f2)"
 
       - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
+        # Pinned for the same reason as the step below: `@v2` is a floating major
+        # tag Google moves on every v2.x release, and this is the step that
+        # actually consumes GCP_SA_KEY. Lower risk than a third-party action
+        # (Google first-party, and floating major tags are conventional there),
+        # but the mutability is the same class, so it gets the same treatment.
+        #
+        # This SHA is exactly where `v2` pointed when pinned: release v2.1.13
+        # (2025-08-28), so behaviour is unchanged. v3.0.0 exists and is a
+        # deliberate, separately-tested upgrade — not bundled here.
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed
         with:
           credentials_json: ${{ secrets.GCP_SA_KEY }}
 
       - name: PR Agent Action
-        uses: qodo-ai/pr-agent@main
+        # Pinned to a commit SHA, not `@main`: this step receives GCP_SA_KEY and
+        # a write-scoped GITHUB_TOKEN, so a mutable ref means upstream can change
+        # what runs with those secrets without review.
+        #
+        # The owner is pinned to the CURRENT name too. The repo moved
+        # qodo-ai -> The-PR-Agent, so `qodo-ai/pr-agent` resolves only via
+        # GitHub's rename redirect. Note this is NOT classic repojacking: the
+        # `qodo-ai` org still exists and is still theirs, so only they could
+        # break the redirect by creating a repo at the old path. It is a dangling
+        # dependency on someone else's namespace hygiene, not an open door.
+        #
+        # This SHA is main@2026-07-20 (post-v0.39.0) — the exact code this setup
+        # was validated against. Bump deliberately, after re-testing.
+        #
+        # PARTIAL MITIGATION, not a closed hole: the action's action.yaml builds
+        # `FROM pragent/pr-agent:github_action`, a MUTABLE Docker Hub tag. Whoever
+        # controls that registry repo can still change the code that runs against
+        # these secrets. Closing that needs a digest pin
+        # (`uses: docker://pragent/pr-agent@sha256:...`), which bypasses the action
+        # wrapper and must be live-tested before adoption.
+        uses: The-PR-Agent/pr-agent@1885eb4056887b8c8a530f0a35b842bba05cb425
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERTEXAI.VERTEX_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
