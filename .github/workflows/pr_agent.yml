@@ -1,6 +1,15 @@
 name: PR-Agent Reviewer
 
 # CodeRabbit replacement — see .pr_agent.toml for review configuration.
+#
+# Per-PR controls (labels):
+#   skip-review         no review runs at all
+#   incremental-review  pushes run only `/review -i` (no describe/improve churn)
+#   (draft PR)          no review runs until marked ready
+#
+# On-demand, by commenting on the PR:
+#   /review     full review        /review -i  incremental review
+#   /improve    code suggestions   /ask <q>    question about the PR
 on:
   pull_request:
     types: [opened, reopened, ready_for_review, synchronize]
@@ -9,11 +18,16 @@ on:
 
 jobs:
   pr_agent_job:
-    # Skip draft PRs (mirrors CodeRabbit `drafts: false`), and only act on
-    # comments that belong to a PR rather than a plain issue.
+    # Skip drafts and any PR labelled `skip-review`. Gating here rather than in
+    # .pr_agent.toml is deliberate: PR-Agent's ignore_pr_labels is not honoured
+    # by the GitHub Action runner, and this avoids starting a runner at all.
     if: >-
-      (github.event_name == 'pull_request' && github.event.pull_request.draft == false) ||
-      (github.event_name == 'issue_comment' && github.event.issue.pull_request != null)
+      (github.event_name == 'pull_request'
+        && github.event.pull_request.draft == false
+        && !contains(github.event.pull_request.labels.*.name, 'skip-review'))
+      || (github.event_name == 'issue_comment'
+        && github.event.issue.pull_request != null
+        && !contains(github.event.issue.labels.*.name, 'skip-review'))
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -21,6 +35,15 @@ jobs:
       contents: read
     name: Run PR Agent
     steps:
+      - name: Select review depth
+        id: depth
+        run: |
+          if [ "${{ contains(github.event.pull_request.labels.*.name, 'incremental-review') }}" = "true" ]; then
+            echo 'push_commands=["/review -i"]' >> "$GITHUB_OUTPUT"
+          else
+            echo 'push_commands=["/describe", "/review -i", "/improve"]' >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
         with:
@@ -38,4 +61,5 @@ jobs:
           GITHUB_ACTION_CONFIG.AUTO_DESCRIBE: "true"
           GITHUB_ACTION_CONFIG.AUTO_IMPROVE: "true"
           GITHUB_ACTION_CONFIG.HANDLE_PUSH_TRIGGER: "true"
-          GITHUB_ACTION_CONFIG.PUSH_COMMANDS: '["/describe", "/review", "/improve"]'
+          # Incremental review on new commits; full review on PR open.
+          GITHUB_ACTION_CONFIG.PUSH_COMMANDS: ${{ steps.depth.outputs.push_commands }}
