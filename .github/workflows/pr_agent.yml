@@ -1,0 +1,28 @@
+name: PR-Agent Reviewer
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+jobs:
+  pr_agent_job:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: read
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: PR Agent Action
+        uses: qodo-ai/pr-agent@main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERTEXAI.VERTEX_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          VERTEXAI.VERTEX_LOCATION: ${{ secrets.GCP_REGION }}
+          CONFIG.MODEL: "vertex_ai/gemini-2.5-pro"
+          CONFIG.FALLBACK_MODELS: '["vertex_ai/gemini-2.5-flash"]'
+          PR_REVIEWER.INLINE_CODE_COMMENTS: "true"
