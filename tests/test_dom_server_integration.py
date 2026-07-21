@@ -1,20 +1,10 @@
 """DOM Server Integration Tests - FastMCP Idiomatic Testing."""
 
-import tempfile
-from pathlib import Path
-
 import pytest
 from fastmcp import Client
 
 from inkscape_mcp.config import InkscapeConfig
 from inkscape_mcp.dom_server import _init_config, app
-
-
-@pytest.fixture
-def temp_workspace():
-    """Create a temporary workspace for testing."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        yield Path(tmpdir)
 
 
 @pytest.fixture
