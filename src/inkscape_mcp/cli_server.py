@@ -332,7 +332,11 @@ def _run_inkscape(
         return _execute_subprocess(cmd, timeout, popen_kw)
 
 
-_ABS_PATH_RE = re.compile(r"(?:/[^\s\"':;]+){2,}")
+_ABS_PATH_RE = re.compile(
+    r"(?:/[^\s\"':;]+){2,}"  # POSIX: /a/b...
+    r"|[A-Za-z]:\\[^\s\"':;]+"  # Windows drive: C:\Users\...
+    r"|\\\\[^\s\"':;]+"  # Windows UNC: \\host\share\...
+)
 
 
 def _scrub_paths(text: str) -> str:

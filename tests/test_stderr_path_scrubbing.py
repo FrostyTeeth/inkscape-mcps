@@ -25,8 +25,26 @@ class TestScrubPaths:
         assert "/Users/sgminim1" not in scrubbed
         assert "inline-abc123.svg" not in scrubbed
 
+    def test_redacts_windows_drive_path(self):
+        text = 'File "C:\\Users\\alice\\workspace\\inline-abc123.svg", line 3'
+        scrubbed = _scrub_paths(text)
+        assert "C:\\Users\\alice" not in scrubbed
+        assert "inline-abc123.svg" not in scrubbed
+
+    def test_redacts_windows_unc_path(self):
+        text = "Could not open \\\\fileserver\\share\\fonts\\theme.conf"
+        scrubbed = _scrub_paths(text)
+        assert "fileserver" not in scrubbed
+        assert "theme.conf" not in scrubbed
+
+    def test_redacts_windows_path_but_keeps_surrounding_message(self):
+        text = 'File "C:\\Users\\alice\\ext.py": ColorError'
+        scrubbed = _scrub_paths(text)
+        assert "C:\\Users\\alice" not in scrubbed
+        assert "ColorError" in scrubbed
+
     def test_preserves_non_path_diagnostic_content(self):
-        text = 'AttributeError: module \'inkex\' has no attribute \'ColorError\''
+        text = "AttributeError: module 'inkex' has no attribute 'ColorError'"
         scrubbed = _scrub_paths(text)
         assert scrubbed == text
 
