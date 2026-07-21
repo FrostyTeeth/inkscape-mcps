@@ -5,6 +5,7 @@ name: PR-Agent Reviewer
 # Per-PR controls (labels):
 #   skip-review         no review runs at all
 #   incremental-review  pushes run only `/review -i` (no describe/improve churn)
+#   super-review        one-off deep pass: xhigh effort, raised caps, no filtering
 #   (draft PR)          no review runs until marked ready
 #
 # On-demand, by commenting on the PR:
@@ -37,12 +38,44 @@ jobs:
     steps:
       - name: Select review depth
         id: depth
+        env:
+          IS_SUPER: ${{ contains(github.event.pull_request.labels.*.name, 'super-review') || contains(github.event.issue.labels.*.name, 'super-review') }}
+          IS_INCREMENTAL: ${{ contains(github.event.pull_request.labels.*.name, 'incremental-review') }}
         run: |
-          if [ "${{ contains(github.event.pull_request.labels.*.name, 'incremental-review') }}" = "true" ]; then
-            echo 'push_commands=["/review -i"]' >> "$GITHUB_OUTPUT"
+          if [ "$IS_SUPER" = "true" ]; then
+            # One-off deep pass: widen generation, drop the confidence floor,
+            # more surrounding context, and a full (not incremental) review.
+            echo "mode=super"                                       >> "$GITHUB_OUTPUT"
+            echo "effort=xhigh"                                     >> "$GITHUB_OUTPUT"
+            echo "max_findings=25"                                  >> "$GITHUB_OUTPUT"
+            echo "per_chunk=10"                                     >> "$GITHUB_OUTPUT"
+            echo "score_threshold=0"                                >> "$GITHUB_OUTPUT"
+            echo "calls=4"                                          >> "$GITHUB_OUTPUT"
+            echo "lines_before=16"                                  >> "$GITHUB_OUTPUT"
+            echo "lines_after=8"                                    >> "$GITHUB_OUTPUT"
+            echo 'push_commands=["/describe", "/review", "/improve"]' >> "$GITHUB_OUTPUT"
+          elif [ "$IS_INCREMENTAL" = "true" ]; then
+            echo "mode=incremental"                                 >> "$GITHUB_OUTPUT"
+            echo "effort=medium"                                    >> "$GITHUB_OUTPUT"
+            echo "max_findings=15"                                  >> "$GITHUB_OUTPUT"
+            echo "per_chunk=6"                                      >> "$GITHUB_OUTPUT"
+            echo "score_threshold=2"                                >> "$GITHUB_OUTPUT"
+            echo "calls=3"                                          >> "$GITHUB_OUTPUT"
+            echo "lines_before=8"                                   >> "$GITHUB_OUTPUT"
+            echo "lines_after=4"                                    >> "$GITHUB_OUTPUT"
+            echo 'push_commands=["/review -i"]'                     >> "$GITHUB_OUTPUT"
           else
+            echo "mode=default"                                     >> "$GITHUB_OUTPUT"
+            echo "effort=medium"                                    >> "$GITHUB_OUTPUT"
+            echo "max_findings=15"                                  >> "$GITHUB_OUTPUT"
+            echo "per_chunk=6"                                      >> "$GITHUB_OUTPUT"
+            echo "score_threshold=2"                                >> "$GITHUB_OUTPUT"
+            echo "calls=3"                                          >> "$GITHUB_OUTPUT"
+            echo "lines_before=8"                                   >> "$GITHUB_OUTPUT"
+            echo "lines_after=4"                                    >> "$GITHUB_OUTPUT"
             echo 'push_commands=["/describe", "/review -i", "/improve"]' >> "$GITHUB_OUTPUT"
           fi
+          echo "Review mode: $(grep '^mode=' "$GITHUB_OUTPUT" | cut -d= -f2)"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -54,12 +87,19 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERTEXAI.VERTEX_PROJECT: ${{ secrets.GCP_PROJECT_ID }}
+          # Must be "global" — Gemini 3.x is not served from regional endpoints.
           VERTEXAI.VERTEX_LOCATION: ${{ secrets.GCP_REGION }}
-          CONFIG.MODEL: "vertex_ai/gemini-2.5-pro"
-          CONFIG.FALLBACK_MODELS: '["vertex_ai/gemini-2.5-flash"]'
+          CONFIG.MODEL: "vertex_ai/gemini-3.1-pro-preview"
+          CONFIG.FALLBACK_MODELS: '["vertex_ai/gemini-2.5-pro"]'
+          CONFIG.REASONING_EFFORT: ${{ steps.depth.outputs.effort }}
+          CONFIG.PATCH_EXTRA_LINES_BEFORE: ${{ steps.depth.outputs.lines_before }}
+          CONFIG.PATCH_EXTRA_LINES_AFTER: ${{ steps.depth.outputs.lines_after }}
+          PR_REVIEWER.NUM_MAX_FINDINGS: ${{ steps.depth.outputs.max_findings }}
+          PR_CODE_SUGGESTIONS.NUM_CODE_SUGGESTIONS_PER_CHUNK: ${{ steps.depth.outputs.per_chunk }}
+          PR_CODE_SUGGESTIONS.SUGGESTIONS_SCORE_THRESHOLD: ${{ steps.depth.outputs.score_threshold }}
+          PR_CODE_SUGGESTIONS.MAX_NUMBER_OF_CALLS: ${{ steps.depth.outputs.calls }}
           GITHUB_ACTION_CONFIG.AUTO_REVIEW: "true"
           GITHUB_ACTION_CONFIG.AUTO_DESCRIBE: "true"
           GITHUB_ACTION_CONFIG.AUTO_IMPROVE: "true"
           GITHUB_ACTION_CONFIG.HANDLE_PUSH_TRIGGER: "true"
-          # Incremental review on new commits; full review on PR open.
           GITHUB_ACTION_CONFIG.PUSH_COMMANDS: ${{ steps.depth.outputs.push_commands }}
