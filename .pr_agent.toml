@@ -1,10 +1,83 @@
+# PR-Agent configuration — CodeRabbit replacement
+# Full option list: https://github.com/qodo-ai/pr-agent/blob/main/pr_agent/settings/configuration.toml
+
 [config]
 model = "vertex_ai/gemini-2.5-pro"
 fallback_models = ["vertex_ai/gemini-2.5-flash"]
 
+# --- Context awareness ---
+# Feed project conventions into every AI call. Default is ["AGENTS.md"] only,
+# which misses CLAUDE.md — the convention file these repos actually use.
+repo_context_files = ["CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md"]
+repo_context_from_default_branch = true
+repo_context_max_lines = 800
+
+# Gemini 2.5 Pro has a very large context window; the 32k default clips big PRs.
+max_model_tokens = 200000
+large_patch_policy = "clip"
+
+# More surrounding code per hunk = fewer false positives from missing context.
+allow_dynamic_context = true
+patch_extra_lines_before = 8
+patch_extra_lines_after = 4
+
+reasoning_effort = "medium"
+
 [pr_reviewer]
-inline_code_comments = true
+# --- Security + code review ---
+require_security_review = true
+require_tests_review = true
+require_estimate_effort_to_review = true
+require_ticket_analysis_review = true
+require_todo_scan = true
+require_can_be_split_review = true
+
 num_max_findings = 10
+persistent_comment = true
+enable_review_labels_security = true
+enable_review_labels_effort = true
+
+extra_instructions = """
+Prioritise, in order:
+1. Correctness bugs: logic errors, off-by-one, null/undefined handling, race
+   conditions, unhandled error paths, incorrect async/await usage.
+2. Security: injection (SQL/shell/template), path traversal, SSRF, hardcoded or
+   logged secrets, missing authn/authz checks, unsafe deserialisation, weak
+   crypto, dependency/supply-chain risk, overly broad permissions.
+3. Data loss / destructive operations: unguarded deletes, migrations without
+   rollback, writes outside the intended state directory.
+4. Consistency with the conventions documented in the repo context files
+   (CLAUDE.md / AGENTS.md). Flag deviations explicitly and cite the rule.
+
+Ground every finding in the diff — quote the specific line. If you are not
+confident an issue is real, say so rather than asserting it. Do not pad the
+review with stylistic nitpicks or restatements of what the code does.
+"""
 
 [pr_description]
 publish_description_as_comment = true
+publish_description_as_comment_persistent = true
+enable_pr_diagram = true
+enable_semantic_files_types = true
+collapsible_file_list = "adaptive"
+
+[pr_code_suggestions]
+focus_only_on_problems = true
+persistent_comment = true
+num_code_suggestions_per_chunk = 4
+max_number_of_calls = 3
+suggestions_score_threshold = 3
+
+[pr_questions]
+use_conversation_history = true
+
+[github_action_config]
+auto_review = true
+auto_describe = true
+auto_improve = true
+# Re-review on every new commit pushed to an open PR.
+# Mirrors CodeRabbit's `auto_pause_after_reviewed_commits: 0`.
+handle_push_trigger = true
+push_commands = ["/describe", "/review", "/improve"]
+push_trigger_ignore_bot_commits = true
+push_trigger_ignore_merge_commits = true
