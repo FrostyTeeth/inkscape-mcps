@@ -2,8 +2,13 @@
 # Full option list: https://github.com/qodo-ai/pr-agent/blob/main/pr_agent/settings/configuration.toml
 
 [config]
-model = "vertex_ai/gemini-2.5-pro"
-fallback_models = ["vertex_ai/gemini-2.5-flash"]
+# Verified callable in this project via the `global` location only — 3.x models
+# 404 in us-central1/us-east5/europe-west4. GCP_REGION secret must be "global".
+# NOTE: 3.1 Pro is still a PREVIEW model (no GA `gemini-3.1-pro` yet); preview
+# models can change behaviour or be withdrawn. Fallback is GA 2.5 Pro.
+# gemini-2.5-flash is deliberately NOT the fallback: deprecated 2026-10-16.
+model = "vertex_ai/gemini-3.1-pro-preview"
+fallback_models = ["vertex_ai/gemini-2.5-pro"]
 
 # --- Context awareness ---
 # Feed project conventions into every AI call. Default is ["AGENTS.md"] only,
@@ -12,7 +17,7 @@ repo_context_files = ["CLAUDE.md", "AGENTS.md", "CONTRIBUTING.md"]
 repo_context_from_default_branch = true
 repo_context_max_lines = 800
 
-# Gemini 2.5 Pro has a very large context window; the 32k default clips big PRs.
+# Gemini has a very large context window; the 32k default clips big PRs.
 max_model_tokens = 200000
 large_patch_policy = "clip"
 
@@ -34,7 +39,11 @@ reasoning_effort = "medium"
 #
 #   skip-review         label -> no review job runs at all
 #   incremental-review  label -> pushes run only `/review -i`
+#   super-review        label -> one-off deep pass: raised caps, xhigh effort
 #   draft PR                  -> no review job runs
+#
+# The super-review caps are applied as env overrides by the workflow, not here,
+# so that the defaults in this file stay the everyday settings.
 
 [pr_reviewer]
 # --- Security + correctness review ---
