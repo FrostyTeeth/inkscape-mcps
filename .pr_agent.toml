@@ -1,0 +1,10 @@
+[config]
+model = "vertex_ai/gemini-2.5-pro"
+fallback_models = ["vertex_ai/gemini-2.5-flash"]
+
+[pr_reviewer]
+inline_code_comments = true
+num_max_findings = 10
+
+[pr_description]
+publish_description_as_comment = true
